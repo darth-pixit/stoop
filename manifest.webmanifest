@@ -1,0 +1,13 @@
+{
+  "name": "Stoop — be kind to your neck",
+  "short_name": "Stoop",
+  "description": "Watches your phone angle and playfully nudges you out of tech-neck.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#FAF6EF",
+  "theme_color": "#FAF6EF",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
