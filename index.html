@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FAF6EF">
+<title>Stoop — be kind to your neck</title>
+<meta name="description" content="Stoop watches your phone angle and playfully nudges you out of tech-neck.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Proxima Nova is licensed; Mulish is the closest open metric match and loads as the live fallback. -->
+<link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ══════════════ Onboarding overlay ══════════════ -->
+<section id="onboarding" class="onboarding hidden" aria-label="Setup"></section>
+
+<!-- ══════════════ App shell ══════════════ -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="logo" aria-label="Stoop">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="logo-word">stoop<span class="logo-dot">.</span></span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-settings" class="icon-btn" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- due check-in banner slot -->
+  <div id="banner-slot"></div>
+
+  <main id="views">
+    <section id="view-now" class="view" data-view="now"></section>
+    <section id="view-stats" class="view hidden" data-view="stats"></section>
+    <section id="view-moves" class="view hidden" data-view="moves"></section>
+    <section id="view-flex" class="view hidden" data-view="flex"></section>
+  </main>
+
+  <nav class="tabbar" aria-label="Main">
+    <button class="tab active" data-tab="now">
+      <span class="tab-ico">🙂</span><span class="tab-label">Now</span>
+    </button>
+    <button class="tab" data-tab="stats">
+      <span class="tab-ico">📈</span><span class="tab-label">Stats</span>
+    </button>
+    <button class="tab" data-tab="moves">
+      <span class="tab-ico">🤸</span><span class="tab-label">Moves</span>
+    </button>
+    <button class="tab" data-tab="flex">
+      <span class="tab-ico">📐</span><span class="tab-label">Bend</span>
+    </button>
+  </nav>
+</div>
+
+<!-- floating live stoop pill -->
+<div id="live-pill" class="live-pill hidden" role="status"></div>
+
+<!-- modal + toast roots -->
+<div id="modal-root"></div>
+<div id="toast-root" class="toast-root" aria-live="polite"></div>
+<div id="viz-tooltip" class="viz-tooltip hidden" role="status"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
