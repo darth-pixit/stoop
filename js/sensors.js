@@ -1,7 +1,9 @@
-// Sensor abstraction: DeviceOrientation (phone pitch for posture) and
-// DeviceMotion gravity (tilt-from-vertical for the flexibility test).
-// Falls back to a simulation source on hardware without sensors (desktop),
-// so every screen stays usable and demo-able.
+// Sensor abstraction for the posture monitor: DeviceOrientation gives the
+// phone pitch we compare against your "good posture" calibration. (The
+// ear-to-shoulder flexibility test no longer uses phone tilt — it watches you
+// through the front camera; see pose.js/flex.js.) Falls back to a simulation
+// source on hardware without sensors (desktop), so every screen stays usable.
+// The DeviceMotion gravity/tilt fields below are retained but currently unused.
 
 const listeners = new Set();
 let running = false;

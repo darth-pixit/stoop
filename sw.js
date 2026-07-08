@@ -1,5 +1,5 @@
 // Minimal offline-first shell cache so Stoop installs as a PWA.
-const CACHE = 'stoop-v1';
+const CACHE = 'stoop-v2';
 const ASSETS = [
   '.',
   'index.html',
@@ -8,7 +8,7 @@ const ASSETS = [
   'icons/icon.svg',
   'js/app.js', 'js/store.js', 'js/strain.js', 'js/sensors.js', 'js/figure.js',
   'js/charts.js', 'js/ui.js', 'js/monitor.js', 'js/stats.js', 'js/exercises.js',
-  'js/flex.js', 'js/onboarding.js', 'js/calibrate.js',
+  'js/flex.js', 'js/pose.js', 'js/onboarding.js', 'js/calibrate.js',
 ];
 
 self.addEventListener('install', (e) => {

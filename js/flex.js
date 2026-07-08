@@ -1,19 +1,32 @@
-// Bend view: ear-to-shoulder flexibility test with live annotations and
-// form nudges, flexibility history, and the weekly check-in schedule.
-import * as sensors from './sensors.js';
+// Bend view: a camera-based ear-to-shoulder flexibility test.
+//
+// The front camera watches your head and shoulders in real time. We measure
+// the *actual* angle your head tilts from vertical (the roll of your eye line)
+// and — crucially — we watch your shoulders: if one creeps up toward your ear
+// to fake extra range, we stop crediting the tilt and coach you to drop it, so
+// the number you log is honest neck flexibility, not a shrug.
+import * as pose from './pose.js';
 import * as store from './store.js';
 import { lineChart } from './charts.js';
-import { createFrontFigure } from './figure.js';
 import { sheet, toast } from './ui.js';
 
-const NS = 'http://www.w3.org/2000/svg';
 const $ = (sel) => document.querySelector(sel);
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// Typical lateral neck flexion tops out around ~45°. Grade against that so the
+// number means something ("is my flexibility good or bad?"), not just a trend.
+function grade(avg) {
+  if (avg >= 40) return { label: 'Excellent', emoji: '🌟', color: 'var(--zone-upright)', soft: 'var(--zone-upright-soft)', ink: '#14712B', note: 'Supple neck — lovely range. Keep it up. 💚' };
+  if (avg >= 30) return { label: 'Good', emoji: '👍', color: 'var(--teal)', soft: 'var(--teal-soft)', ink: '#0B6A60', note: 'Healthy side-bend. A weekly re-test keeps it honest.' };
+  if (avg >= 20) return { label: 'Fair', emoji: '🙂', color: 'var(--zone-mild)', soft: 'var(--zone-mild-soft)', ink: '#8A5A00', note: 'A little tight — the ear-to-shoulder move will loosen it.' };
+  return { label: 'Limited', emoji: '🧊', color: 'var(--zone-severe)', soft: 'var(--zone-severe-soft)', ink: '#A32536', note: 'Stiff today. Go gently and re-test after a round of moves.' };
+}
+
 export function render(root) {
   const s = store.get();
   const last = s.flexLogs[s.flexLogs.length - 1];
+  const g = last ? grade((last.left + last.right) / 2) : null;
 
   root.innerHTML = `
     <p class="eyebrow">Bend</p>
@@ -26,15 +39,19 @@ export function render(root) {
 
     <div class="card">
       <h2>Ear → shoulder test</h2>
-      <p class="sub">Your side-bend range is the canary for phone-neck stiffness. Test any time — we log the angles for you.</p>
+      <p class="sub">Your front camera tracks how far your head really tilts — and watches that your shoulder stays down, so the reading is true side-bend, not a shrug.</p>
       ${last ? `
-        <div class="result-split" style="margin-top:4px">
+        <div class="flex-rating" style="background:${g.soft};color:${g.ink}">
+          <span class="fr-emoji">${g.emoji}</span>
+          <div><b>${g.label} flexibility</b><span>${g.note}</span></div>
+        </div>
+        <div class="result-split" style="margin-top:10px">
           <div class="result-side"><div class="rs-v" style="color:var(--series-flex-l)">${last.left}°</div><div class="rs-k">left tilt</div></div>
           <div class="result-side"><div class="rs-v" style="color:var(--series-flex-r)">${last.right}°</div><div class="rs-k">right tilt</div></div>
         </div>
         <p class="sub" style="margin:0 0 12px">Last tested ${new Date(last.iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${last.quality === 'retake' ? ' · 🙈 shoulder crept up — worth a redo' : ''}${asymmetryNote(last)}</p>
       ` : ''}
-      <button class="btn coral block" id="btn-flex-test">📐 ${last ? 'Test again' : 'Take your first test'}</button>
+      <button class="btn coral block" id="btn-flex-test">📸 ${last ? 'Test again' : 'Take your first test'}</button>
     </div>
 
     <p class="eyebrow">Your flexibility over time</p>
@@ -114,36 +131,57 @@ function renderHistory() {
   });
 }
 
-// ═══════════════ the guided test ═══════════════
+// ═══════════════ the guided camera test ═══════════════
 // Phases per side: position → baseline → tilt → locked. Then results.
+const CREEP_GATE = 0.10;    // shoulder rise (× shoulder-width) that counts as a shrug
+const REAL_BEND = 8;        // ° below which we don't consider it a bend yet
+
 export function startTest({ embedded = null, onDone = null } = {}) {
   const results = { right: null, left: null };
+  const clean = { right: true, left: true }; // shoulders stayed down?
   let side = 'right';
   let phase = 'position';
-  let baseline = 0;
+  let base = null;         // { roll, shoulderTiltY, shoulderWidth, eyeMidY }
   let maxTilt = 0;
   let plateauSince = null;
   let plateauMaxRef = 0;
   let phaseEnteredAt = performance.now();
-  const buf = []; // rolling {t, tilt} for rate/stability checks
-  let unsub = null;
+  const buf = [];          // rolling {t, roll} for rate/stability checks
   let closed = false;
+
+  // camera / sim plumbing
+  let stream = null;
+  let rafId = null;
+  let lastTs = 0;
+  let simMode = false;
+  let simTilt = 0;
+  let simCreep = 0;
+  let video, canvas, ctx, wrap;
 
   const inner = `
     <div class="sheet-head">
-      <h3>📐 Ear → shoulder</h3>
+      <h3>📸 Ear → shoulder</h3>
       ${embedded ? '' : '<button class="btn ghost small" data-close>Close</button>'}
     </div>
     <div class="flex-phase-dots" id="fx-dots"><i class="on"></i><i></i><i></i><i></i></div>
-    <div class="protractor-wrap" id="fx-stage"></div>
+    <div class="flex-cam-wrap" id="fx-cam">
+      <video id="fx-video" playsinline muted></video>
+      <canvas id="fx-overlay"></canvas>
+      <div class="cam-creep hidden" id="fx-creep">🙈 shoulder up</div>
+      <div class="cam-status" id="fx-status">
+        <div class="cam-spinner"></div>
+        <div>Waking up the camera…</div>
+      </div>
+    </div>
     <div class="flex-live-angle">
       <div class="fla-big"><span id="fx-angle">0</span>°</div>
       <div class="pc-sub" id="fx-side">Right side first</div>
     </div>
-    <div class="nudge-bubble" id="fx-nudge">Hold your phone flat against your <b>right ear</b>, screen out — like a very slow phone call 📞</div>
-    <div class="sim-strip ${sensors.isSimulated() ? '' : 'hidden'}" id="fx-sim">
-      <label>🖥️ Simulating the tilt — drag slowly to "bend"</label>
+    <div class="nudge-bubble" id="fx-nudge">Get your head <b>and both shoulders</b> in frame, sitting tall 🪞</div>
+    <div class="sim-strip hidden" id="fx-sim">
+      <label>🖥️ No camera here — simulating. Drag to "bend"</label>
       <input type="range" min="0" max="55" value="0" step="0.5" id="fx-sim-range">
+      <label class="sim-check"><input type="checkbox" id="fx-sim-creep"> 🙈 fake a shoulder shrug</label>
     </div>
     <div class="monitor-row" id="fx-actions"></div>
   `;
@@ -160,22 +198,116 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   }
 
   const q = (sel) => panel.querySelector(sel);
-  const fig = createFrontFigure(q('#fx-stage'), { showEarShoulderDots: true });
-  const anno = buildAnnotations(fig);
+  video = q('#fx-video');
+  canvas = q('#fx-overlay');
+  ctx = canvas.getContext('2d');
+  wrap = q('#fx-cam');
 
-  q('#fx-sim-range')?.addEventListener('input', (e) => sensors.setSimAngle(+e.target.value));
+  q('#fx-sim-range').addEventListener('input', (e) => { simTilt = +e.target.value; });
+  q('#fx-sim-creep').addEventListener('change', (e) => { simCreep = e.target.checked ? 0.18 : 0; });
 
-  sensors.start();
-  unsub = sensors.subscribe(onReading);
-  // sim mode may only be detected ~1.5s after start(); reveal the slider then
-  // and zero the sim so a slump left on the Now slider doesn't leak in
-  if (sensors.isSimulated()) sensors.setSimAngle(0);
-  setTimeout(() => {
-    if (!closed && sensors.isSimulated()) {
-      sensors.setSimAngle(+(q('#fx-sim-range')?.value ?? 0));
-      q('#fx-sim')?.classList.remove('hidden');
+  boot();
+
+  // ── startup: camera + model, else simulation ──────────────────────
+  async function boot() {
+    if (!pose.cameraSupported()) return fallToSim('This device has no camera we can use');
+    // Assign `stream` the moment the camera opens, so if the model load fails
+    // afterwards we can still stop the camera we opened.
+    const camP = pose.openCamera(video).then((s) => { stream = s; });
+    try {
+      await Promise.all([pose.loadDetector(), camP]);
+      if (closed) { pose.stopCamera(stream); return; }
+      status(null);
+      loop();
+    } catch (err) {
+      pose.stopCamera(stream);
+      // permission denied, model/CDN failure, or no camera → still usable
+      const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+      fallToSim(denied ? 'Camera permission was blocked' : "Couldn't start the camera");
     }
-  }, 1800);
+  }
+
+  function fallToSim(why) {
+    if (closed) return;
+    simMode = true;
+    base = { roll: 0, shoulderTiltY: 0, shoulderWidth: 1, eyeMidY: 0.4 };
+    wrap.classList.add('hidden');
+    q('#fx-sim').classList.remove('hidden');
+    setPhase('tilt');
+    nudge(`${why} — you can still demo it below 👇`);
+    loop();
+  }
+
+  function status(msg) {
+    const el = q('#fx-status');
+    if (!el) return;
+    if (msg == null) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.innerHTML = `<div class="cam-spinner"></div><div>${msg}</div>`;
+  }
+
+  // ── per-frame loop ────────────────────────────────────────────────
+  function loop() {
+    if (closed) return;
+    const ts = Math.max(lastTs + 1, performance.now());
+    lastTs = ts;
+
+    let sample;
+    if (simMode) {
+      sample = { framed: true, roll: simTilt, creep: simCreep, read: null };
+    } else {
+      const r = pose.readPose(video, ts);
+      sample = r.ok
+        ? {
+            framed: true,
+            roll: r.rollDeg,
+            creep: base ? Math.abs(r.shoulderTiltY - base.shoulderTiltY) / base.shoulderWidth : 0,
+            read: r,
+          }
+        : { framed: false };
+      drawOverlay(sample);
+    }
+
+    onSample(sample);
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function onSample(sample) {
+    if (closed) return;
+    const now = performance.now();
+
+    if (!sample.framed) {
+      if (phase === 'position') nudge('Line your head and both shoulders up in the frame 🪞', 'warn');
+      else nudge('I lost you — get back in frame 🪞', 'warn');
+      return;
+    }
+
+    buf.push({ t: now, roll: sample.roll });
+    while (buf.length && now - buf[0].t > 1000) buf.shift();
+
+    const eff = base ? Math.abs(sample.roll - base.roll) : 0;
+    const shown = phase === 'locked' ? maxTilt : eff;
+    q('#fx-angle').textContent = Math.round(shown);
+
+    q('#fx-creep').classList.toggle('hidden', !(phase === 'tilt' && sample.creep > CREEP_GATE));
+
+    if (phase === 'position') stepPosition(sample, now);
+    else if (phase === 'baseline') stepBaseline(sample, now);
+    else if (phase === 'tilt') stepTilt(eff, sample, now);
+  }
+
+  function stability() {
+    if (buf.length < 4) return 99;
+    const vals = buf.map((b) => b.roll);
+    const mean = vals.reduce((a, v) => a + v, 0) / vals.length;
+    return Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+  }
+
+  function rate() {
+    if (buf.length < 2) return 0;
+    const a = buf[0], b = buf[buf.length - 1];
+    return Math.abs(b.roll - a.roll) / Math.max(0.05, (b.t - a.t) / 1000);
+  }
 
   function setPhase(p) {
     phase = p;
@@ -192,88 +324,70 @@ export function startTest({ embedded = null, onDone = null } = {}) {
     n.innerHTML = text;
   }
 
-  function onReading(r) {
-    if (closed) return;
-    const now = performance.now();
-    const rawTilt = r.tiltFromVertical;
-    buf.push({ t: now, tilt: rawTilt, fwd: r.forwardness });
-    while (buf.length && now - buf[0].t > 1000) buf.shift();
-
-    const eff = Math.max(0, rawTilt - baseline);
-    const shown = phase === 'tilt' || phase === 'locked' ? eff : rawTilt;
-    q('#fx-angle').textContent = Math.round(phase === 'locked' ? maxTilt : shown);
-    const dir = side === 'right' ? 1 : -1;
-    fig.set({ tilt: dir * (phase === 'locked' ? maxTilt : eff), mood: eff > 12 ? 'effort' : 'happy' });
-    anno.update(dir * (phase === 'locked' ? maxTilt : eff), dir * maxTilt);
-
-    if (phase === 'position') stepPosition(rawTilt, now);
-    else if (phase === 'baseline') stepBaseline(now);
-    else if (phase === 'tilt') stepTilt(eff, r, now);
-  }
-
-  function stability() {
-    if (buf.length < 4) return 99;
-    const vals = buf.map((b) => b.tilt);
-    const mean = vals.reduce((a, v) => a + v, 0) / vals.length;
-    return Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
-  }
-
-  function rate() {
-    if (buf.length < 2) return 0;
-    const a = buf[0], b = buf[buf.length - 1];
-    return Math.abs(b.tilt - a.tilt) / Math.max(0.05, (b.t - a.t) / 1000);
-  }
-
-  function stepPosition(rawTilt, now) {
-    if (now - phaseEnteredAt < 800) return;
-    if (rawTilt > 14) {
-      nudge('Start tall — imagine a string pulling the crown of your head up 🎈', 'warn');
+  function stepPosition(sample, now) {
+    if (now - phaseEnteredAt < 700) return;
+    if (Math.abs(sample.roll) > 22) {
+      nudge('Start tall and level — imagine a string pulling the crown of your head up 🎈', 'warn');
       return;
     }
-    if (stability() > 4 || rate() > 4) {
-      nudge('Almost — hold still for a second so I can zero the protractor 🧘');
+    if (stability() > 3 || rate() > 5) {
+      nudge('Almost — hold still a moment so I can zero it 🧘');
       return;
     }
     nudge('Perfect. Zeroing… don\'t move ✨', 'ok');
     setPhase('baseline');
   }
 
-  function stepBaseline(now) {
-    // a slow steady drift has low variance, so gate on velocity too
-    if (stability() > 4 || rate() > 4) { setPhase('position'); return; }
-    if (now - phaseEnteredAt < 1200) return;
-    baseline = buf.reduce((a, b) => a + b.tilt, 0) / buf.length;
+  function stepBaseline(sample, now) {
+    if (stability() > 3 || rate() > 5) { setPhase('position'); return; }
+    if (now - phaseEnteredAt < 1000) return;
+    base = {
+      roll: buf.reduce((a, b) => a + b.roll, 0) / buf.length,
+      shoulderTiltY: sample.read ? sample.read.shoulderTiltY : 0,
+      shoulderWidth: sample.read ? sample.read.shoulderWidth : 1,
+      eyeMidY: sample.read ? sample.read.eyeMidY : 0.4,
+    };
     maxTilt = 0;
+    clean[side] = true;
     setPhase('tilt');
-    nudge(`Now tip your <b>${side} ear</b> toward your shoulder — slow as honey 🍯. Shoulders stay heavy!`);
+    nudge(`Now tip your <b>${side} ear</b> toward your shoulder — slow as honey 🍯. Keep that shoulder <b>heavy</b>!`);
   }
 
-  function stepTilt(eff, r, now) {
-    if (eff > maxTilt) maxTilt = eff;
+  function stepTilt(eff, sample, now) {
+    const creeping = sample.creep > CREEP_GATE;
+    // Only credit range earned with the shoulder down — a shrug earns nothing.
+    if (!creeping && eff > maxTilt) maxTilt = eff;
+    if (creeping && eff > REAL_BEND) clean[side] = false;
 
     // form rules, worst first — one nudge at a time so it stays friendly
-    if (rate() > 40) { nudge('Whoa, slow down 🐢 — this is a stretch, not a headbang', 'warn'); plateauSince = null; return; }
-    if (r.forwardness > 0.55 && eff > 8) { nudge('You\'re tipping forward — think <b>ear to shoulder</b>, not chin to chest 👂→🤷', 'warn'); return; }
-    if (stability() > 7) { nudge('Keep the phone gently pressed to your ear 📱🤝👂', 'warn'); return; }
+    if (rate() > 55) { nudge('Whoa, slow down 🐢 — this is a stretch, not a headbang', 'warn'); plateauSince = null; return; }
+    if (creeping && eff > 5) {
+      nudge('Shoulder\'s sneaking up! 🙈 Melt it down and let the <b>neck</b> do the bending', 'warn');
+      plateauSince = null;
+      return;
+    }
+    // forward nod instead of a side-bend: head drops but the eye line barely rolls
+    if (!simMode && sample.read && eff < REAL_BEND &&
+        sample.read.eyeMidY - base.eyeMidY > 0.06) {
+      nudge('That\'s a forward nod — think <b>ear to shoulder</b>, not chin to chest 👂→🤷', 'warn');
+      return;
+    }
     if (now - phaseEnteredAt > 30000 && maxTilt < 10) {
-      nudge('Hmm, barely moving. Phone snug against your ear? Let\'s reset and try again 🔄', 'warn');
+      nudge('Barely moving — let\'s reset and try again. Sit tall first 🔄', 'warn');
       setPhase('position');
       return;
     }
 
-    // plateau near personal max → lock the measurement after a steady hold.
-    // The max must stop GROWING too, else a slow climb would lock early.
-    if (maxTilt > 8 && eff > maxTilt - 3) {
+    // plateau near personal max → lock after a steady hold. The max must stop
+    // GROWING too, else a slow climb would lock early.
+    if (maxTilt > REAL_BEND && eff > maxTilt - 3) {
       if (plateauSince == null || maxTilt > plateauMaxRef + 1.5) {
         plateauSince = now;
         plateauMaxRef = maxTilt;
       }
       const held = now - plateauSince;
-      if (held > 1600) {
-        lockSide();
-      } else {
-        nudge(`Hold it there… ${Math.ceil((1600 - held) / 500)} 🫸`, 'ok');
-      }
+      if (held > 1500) lockSide();
+      else nudge(`Hold it there… ${Math.ceil((1500 - held) / 500)} 🫸`, 'ok');
     } else {
       plateauSince = null;
       if (eff > 4) nudge('Nice — keep sinking until you feel the far side wake up 🌊');
@@ -283,18 +397,22 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   function lockSide() {
     results[side] = Math.round(maxTilt);
     setPhase('locked');
-    nudge(`${side === 'right' ? 'Right' : 'Left'} side: <b>${results[side]}°</b> — lovely bend! 🎉`, 'ok');
+    q('#fx-angle').textContent = results[side];
+    nudge(`${side === 'right' ? 'Right' : 'Left'} side: <b>${results[side]}°</b>${clean[side] ? ' — lovely bend! 🎉' : ' 🙈'}`, clean[side] ? 'ok' : 'warn');
     const actions = q('#fx-actions');
     if (side === 'right') {
       actions.innerHTML = '<button class="btn primary block" id="fx-next">👈 Now the left side</button>';
       actions.querySelector('#fx-next').addEventListener('click', () => {
         side = 'left';
         maxTilt = 0;
+        base = simMode ? base : null; // recapture an upright baseline for the new side
+        buf.length = 0;
         q('#fx-side').textContent = 'Left side';
         q('#fx-actions').innerHTML = '';
-        q('#fx-sim-range') && (q('#fx-sim-range').value = 0, sensors.setSimAngle(0));
-        setPhase('position');
-        nudge('Swap: phone flat against your <b>left ear</b> now 📞');
+        if (simMode) { simTilt = 0; q('#fx-sim-range').value = 0; q('#fx-sim-creep').checked = false; simCreep = 0; }
+        q('#fx-creep').classList.add('hidden');
+        setPhase(simMode ? 'tilt' : 'position');
+        nudge(simMode ? 'Drag to bend the <b>left</b> side 👇' : 'Sit tall again — then tip your <b>left ear</b> down 🪞');
       });
     } else {
       actions.innerHTML = '<button class="btn coral block" id="fx-done">See my results 🎊</button>';
@@ -305,44 +423,49 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   function showResults() {
     teardown();
     if (!embedded) closeSheet(); // drop the test sheet before the results sheet
-    const honesty = `
+    const avg = (results.left + results.right) / 2;
+    const g = grade(avg);
+    const cleanBoth = clean.left && clean.right;
+    const out = `
       <div class="sheet-head"><h3>🎊 Your bend today</h3></div>
+      <div class="flex-rating big" style="background:${g.soft};color:${g.ink}">
+        <span class="fr-emoji">${g.emoji}</span>
+        <div><b>${g.label} flexibility</b><span>${g.note}</span></div>
+      </div>
       <div class="result-split">
         <div class="result-side"><div class="rs-v" style="color:var(--series-flex-l)">${results.left}°</div><div class="rs-k">left tilt</div></div>
         <div class="result-side"><div class="rs-v" style="color:var(--series-flex-r)">${results.right}°</div><div class="rs-k">right tilt</div></div>
       </div>
       ${compareLine(results)}
-      <p class="sub" style="margin-top:14px"><b>Quick honesty check 😇</b> — did a shoulder sneak up toward your ear?</p>
-      <div class="honesty-check">
-        <button class="chip" data-q="clean">🙅 Nope, shoulders stayed heavy</button>
-        <button class="chip" data-q="retake">🙈 …it crept up a little</button>
+      <div class="form-verdict ${cleanBoth ? 'ok' : 'warn'}">
+        ${cleanBoth
+          ? '✅ Shoulders stayed heavy the whole time — clean, honest reading.'
+          : '🙈 A shoulder crept up during the test — we didn\'t count the shrug, but a cleaner redo will read truer.'}
       </div>
+      <div class="monitor-row"><button class="btn coral block" id="fx-log">Log it 📌</button></div>
     `;
-    const target = embedded || null;
-    if (target) {
-      target.innerHTML = `<div>${honesty}</div>`;
-      wireHonesty(target, target.firstElementChild);
+    let close2 = null;
+    let rootEl;
+    if (embedded) {
+      embedded.innerHTML = `<div>${out}</div>`;
+      rootEl = embedded;
     } else {
-      const sh = sheet(honesty);
-      wireHonesty(null, sh.el, sh.close);
+      const sh = sheet(out);
+      close2 = sh.close;
+      rootEl = sh.el;
     }
-  }
-
-  function wireHonesty(embedTarget, el2, close2) {
-    el2.querySelectorAll('[data-q]').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        const quality = chip.dataset.q;
-        store.logFlex({ iso: new Date().toISOString(), left: results.left, right: results.right, quality });
-        if (quality === 'retake') {
-          toast('Logged with a form note — try pinning the shoulder down next time 📌');
-        } else {
-          toast('Logged clean. Your future neck thanks you 🙏');
-        }
-        close2?.();
-        onDone?.(results);
-        const view = document.getElementById('view-flex');
-        if (!embedTarget && view && !view.classList.contains('hidden')) render(view);
+    rootEl.querySelector('#fx-log').addEventListener('click', () => {
+      store.logFlex({
+        iso: new Date().toISOString(),
+        left: results.left,
+        right: results.right,
+        quality: cleanBoth ? 'clean' : 'retake',
       });
+      toast(cleanBoth ? 'Logged clean. Your future neck thanks you 🙏' : 'Logged with a form note — pin that shoulder down next time 📌');
+      close2?.();
+      onDone?.(results);
+      const view = document.getElementById('view-flex');
+      if (!embedded && view && !view.classList.contains('hidden')) render(view);
     });
   }
 
@@ -356,57 +479,71 @@ export function startTest({ embedded = null, onDone = null } = {}) {
     return '<p class="sub">Holding steady vs last time ➡️</p>';
   }
 
+  // ── overlay: mirror the skeleton onto the live video ──────────────
+  function drawOverlay(sample) {
+    if (!ctx) return;
+    const rect = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const W = rect.width, H = rect.height;
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    if (!sample || !sample.framed || !sample.read) return;
+
+    // Map normalized video coords → displayed px, matching object-fit:cover
+    // and the horizontal mirror of the selfie view.
+    const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+    const scale = Math.max(W / vw, H / vh);
+    const dw = vw * scale, dh = vh * scale;
+    const ox = (W - dw) / 2, oy = (H - dh) / 2;
+    const P = (p) => ({ x: W - (ox + p.x * dw), y: oy + p.y * dh });
+
+    const pts = sample.read.pts;
+    const shouldersDown = sample.creep <= CREEP_GATE;
+
+    const line = (a, b, color, w) => {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round';
+      ctx.stroke();
+    };
+    const dot = (p, color, r) => {
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color; ctx.fill();
+    };
+
+    const shL = P(pts.shL), shR = P(pts.shR);
+    const eyeL = P(pts.eyeL), eyeR = P(pts.eyeR);
+    const earL = P(pts.earL), earR = P(pts.earR);
+    const eyeMid = { x: (eyeL.x + eyeR.x) / 2, y: (eyeL.y + eyeR.y) / 2 };
+
+    // shoulder line — green when down, coral when shrugging
+    line(shL, shR, shouldersDown ? '#17B8A6' : '#FF6B5E', 6);
+    dot(shL, shouldersDown ? '#0E8F82' : '#E8503F', 7);
+    dot(shR, shouldersDown ? '#0E8F82' : '#E8503F', 7);
+
+    // reference plumb through the head + the head's up-axis, so the gap
+    // between them *is* the tilt being measured
+    const len = dh * 0.22;
+    line({ x: eyeMid.x, y: eyeMid.y - len }, { x: eyeMid.x, y: eyeMid.y + len * 0.2 }, 'rgba(255,255,255,.55)', 2);
+    const ex = eyeR.x - eyeL.x, ey = eyeR.y - eyeL.y;
+    const el = Math.hypot(ex, ey) || 1;
+    const up = { x: eyeMid.x + (ey / el) * len, y: eyeMid.y - (ex / el) * len };
+    line(eyeMid, up, '#7C5CE0', 4);
+
+    // eye + ear markers
+    line(eyeL, eyeR, '#7C5CE0', 3);
+    dot(eyeL, '#7C5CE0', 4); dot(eyeR, '#7C5CE0', 4);
+    dot(earL, '#7C5CE0', 4); dot(earR, '#7C5CE0', 4);
+  }
+
   function teardown() {
+    if (closed) return;
     closed = true;
-    unsub?.();
+    if (rafId) cancelAnimationFrame(rafId);
+    pose.stopCamera(stream);
   }
-}
-
-// Live protractor annotations drawn straight into the figure's SVG:
-// plumb line, sweeping arc, and a ghost tick at the session max.
-function buildAnnotations(fig) {
-  const { svg, refs } = fig;
-  const { PIVOT } = refs;
-  const R = 118;
-  const g = document.createElementNS(NS, 'g');
-  svg.appendChild(g);
-
-  const mk = (tag, attrs) => {
-    const n = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
-    g.appendChild(n);
-    return n;
-  };
-
-  mk('line', { x1: PIVOT.x, y1: PIVOT.y - R - 8, x2: PIVOT.x, y2: PIVOT.y - 40, stroke: '#C9C3B8', 'stroke-width': 2, 'stroke-dasharray': '3 6', 'stroke-linecap': 'round' });
-  // faint full protractor scale
-  mk('path', { d: arcPath(PIVOT, R, -50, 50), fill: 'none', stroke: '#ECE7DE', 'stroke-width': 2 });
-  const sweep = mk('path', { fill: 'none', stroke: '#7C5CE0', 'stroke-width': 3.5, 'stroke-linecap': 'round', opacity: 0 });
-  const ghost = mk('line', { stroke: '#FF6B5E', 'stroke-width': 3, 'stroke-linecap': 'round', opacity: 0 });
-
-  function arcPath(c, r, fromDeg, toDeg) {
-    const a0 = ((fromDeg - 90) * Math.PI) / 180;
-    const a1 = ((toDeg - 90) * Math.PI) / 180;
-    const large = Math.abs(toDeg - fromDeg) > 180 ? 1 : 0;
-    return `M ${c.x + r * Math.cos(a0)} ${c.y + r * Math.sin(a0)} A ${r} ${r} 0 ${large} ${toDeg > fromDeg ? 1 : 0} ${c.x + r * Math.cos(a1)} ${c.y + r * Math.sin(a1)}`;
-  }
-
-  return {
-    update(tiltSigned, maxSigned) {
-      if (Math.abs(tiltSigned) > 2) {
-        sweep.setAttribute('d', arcPath(PIVOT, R, 0, tiltSigned));
-        sweep.setAttribute('opacity', 0.95);
-      } else {
-        sweep.setAttribute('opacity', 0);
-      }
-      if (Math.abs(maxSigned) > 4) {
-        const a = ((maxSigned - 90) * Math.PI) / 180;
-        ghost.setAttribute('x1', PIVOT.x + (R - 8) * Math.cos(a));
-        ghost.setAttribute('y1', PIVOT.y + (R - 8) * Math.sin(a));
-        ghost.setAttribute('x2', PIVOT.x + (R + 8) * Math.cos(a));
-        ghost.setAttribute('y2', PIVOT.y + (R + 8) * Math.sin(a));
-        ghost.setAttribute('opacity', 0.9);
-      }
-    },
-  };
 }

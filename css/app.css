@@ -349,6 +349,52 @@ button { font-family: inherit; color: inherit; }
 .honesty-check { display: grid; gap: 8px; margin-top: 8px; }
 .honesty-check .chip { text-align: left; }
 
+/* live camera stage for the bend test */
+.flex-cam-wrap {
+  position: relative; margin: 6px 0 2px; border-radius: var(--radius);
+  overflow: hidden; background: #1B1922; aspect-ratio: 3 / 4;
+  box-shadow: var(--shadow); max-height: 62dvh;
+}
+.flex-cam-wrap video, .flex-cam-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.flex-cam-wrap video { object-fit: cover; transform: scaleX(-1); } /* mirror the selfie view */
+.flex-cam-wrap canvas { pointer-events: none; }
+.cam-status {
+  position: absolute; inset: 0; z-index: 2; display: grid; place-content: center; gap: 12px;
+  justify-items: center; color: #fff; font-weight: 800; font-size: 13.5px; text-align: center;
+  background: rgba(27,25,34,.72); padding: 20px;
+}
+.cam-spinner {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.28); border-top-color: #fff;
+  animation: camspin .8s linear infinite;
+}
+@keyframes camspin { to { transform: rotate(360deg); } }
+.cam-creep {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3;
+  background: var(--coral); color: #fff; font-weight: 800; font-size: 12.5px;
+  padding: 6px 13px; border-radius: 999px; box-shadow: var(--shadow-pop);
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.sim-check { display: flex !important; align-items: center; gap: 8px; margin: 8px 0 0 !important;
+  color: var(--ink-2) !important; font-weight: 700; font-size: 12.5px; cursor: pointer; }
+.sim-check input { width: 16px; height: 16px; accent-color: var(--lilac); }
+
+/* flexibility rating pill + auto form verdict */
+.flex-rating {
+  display: flex; align-items: center; gap: 12px; border-radius: var(--radius-sm);
+  padding: 12px 14px; margin-top: 12px;
+}
+.flex-rating.big { padding: 15px 16px; margin: 6px 0 12px; }
+.flex-rating .fr-emoji { font-size: 26px; line-height: 1; }
+.flex-rating b { font-size: 15.5px; display: block; }
+.flex-rating span { font-size: 12.5px; opacity: .85; line-height: 1.4; }
+.form-verdict {
+  margin-top: 12px; border-radius: var(--radius-sm); padding: 12px 14px;
+  font-size: 13px; font-weight: 700; line-height: 1.5;
+}
+.form-verdict.ok { background: var(--zone-upright-soft); color: #14712B; }
+.form-verdict.warn { background: var(--coral-soft); color: #A83225; }
+
 .checkin-banner {
   margin: 12px 0 0; border-radius: var(--radius); padding: 16px 18px;
   background: linear-gradient(120deg, #7C5CE0, #9F7BEB); color: #fff;

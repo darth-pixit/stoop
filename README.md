@@ -20,13 +20,20 @@ and shows you — live, in kilograms — what your slouch is doing to your neck.
 - **Moves** — six curated exercises with animated demos and a guided
   start/log player (chin tucks, ear-to-shoulder, owl turns, shoulder rolls,
   doorway opener, sky reach).
-- **Bend tests** — a guided ear-to-shoulder flexibility test using the
-  phone's gravity sensor: hold the phone to your ear, tilt, and it zeroes,
-  annotates, and locks your angle in real time. Form nudges catch the usual
-  cheats (moving too fast, tipping forward instead of sideways, jittery
-  phone, not starting tall, giving up early) and a post-test honesty check
-  flags shoulder-creep. Left/right angles are logged and charted; a weekly
-  check-in day keeps you re-testing.
+- **Bend tests** — a guided ear-to-shoulder flexibility test that watches
+  *you* through the front camera (MediaPipe pose landmarks, on-device). It
+  measures the real angle your head tilts from vertical — the roll of your
+  eye/ear line — with a live skeleton overlay, then zeroes, tracks, and locks
+  your angle in real time. Crucially it also watches your shoulders: if one
+  creeps up toward your ear to fake range, that tilt earns nothing and you get
+  coached to drop it, so the logged number is honest neck flexibility, not a
+  shrug. Each result is graded (Limited → Fair → Good → Excellent against a
+  ~45° healthy range) so you know where you stand, not just the trend. Form
+  nudges catch the usual cheats (moving too fast, forward nod instead of a
+  side-bend, not starting tall, giving up early). Left/right angles are logged
+  and charted; a weekly check-in day keeps you re-testing. Where no camera is
+  available (or permission is declined) the test drops into a clearly-labelled
+  simulation so it stays demoable.
 
 ## Run it
 
@@ -51,6 +58,10 @@ motion permission on a button tap during setup.
 - "Phone usage time" is therefore *monitored* time, which is exactly what
   the stoop-share stat normalises against.
 - All data stays in `localStorage`. No accounts, no servers.
+- The bend test's pose model + wasm are fetched once from a CDN
+  (`@mediapipe/tasks-vision`) and then cached by the browser; the **camera
+  frames themselves never leave the device** — all inference is on-device.
+  First use needs a network connection and camera permission (HTTPS/localhost).
 - Strain numbers are the Hansraj (2014) cervical-load estimates — playful
   motivation, not medical advice.
 
