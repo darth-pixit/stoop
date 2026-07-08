@@ -105,13 +105,13 @@ export function runOnboarding(rootEl, onFinish) {
   function stepFlex(wrap) {
     wrap.insertAdjacentHTML('beforeend', `
       <h1>How bendy are you <span class="accent">today?</span></h1>
-      <p class="lead">A 60-second ear-to-shoulder test sets your baseline. Every week we re-test and you watch the number grow. 🌱</p>
+      <p class="lead">A 60-second ear-to-shoulder test sets your baseline. Your front camera measures the real tilt of your head — and keeps you honest about that shoulder. We re-test weekly and you watch the number grow. 🌱</p>
       <div id="ob-flex-slot"></div>
     `);
     const slot = wrap.querySelector('#ob-flex-slot');
     const kick = document.createElement('button');
     kick.className = 'btn primary block';
-    kick.textContent = '📐 Take the baseline test';
+    kick.textContent = '📸 Take the baseline test';
     slot.appendChild(kick);
     kick.addEventListener('click', () => {
       kick.remove();
