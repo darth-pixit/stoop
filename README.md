@@ -35,12 +35,12 @@ and shows you — live, in kilograms — what your slouch is doing to your neck.
   available (or permission is declined) the test drops into a clearly-labelled
   simulation so it stays demoable.
 
-## Run it
+## Run it (web / PWA)
 
-Any static server works:
+The web app lives in `www/` and needs no build step. Any static server works:
 
 ```bash
-python3 -m http.server 8000
+npm run serve          # python3 -m http.server 8000 --directory www
 # → http://localhost:8000 (open on your phone for real sensors)
 ```
 
@@ -50,14 +50,49 @@ automatically — sliders stand in for the sensors so every screen is usable.
 For real sensor data on a phone you need HTTPS (or localhost). iOS asks for
 motion permission on a button tap during setup.
 
+## iOS & Android apps (Capacitor — not Expo)
+
+The native apps are the same `www/` web app wrapped by
+[Capacitor](https://capacitorjs.com): a real Xcode project and a real Android
+Studio project, no rewrite and no Expo. Ship them to beta testers via TestFlight
+and Google Play internal testing.
+
+```bash
+npm install
+npx cap add ios        # generates ios/ (gitignored)
+npx cap add android    # generates android/ (gitignored)
+npx cap copy           # after any change under www/
+```
+
+Full walkthrough — deep-link/SSO setup, icons, and beta distribution — in
+[`docs/NATIVE_BUILD.md`](docs/NATIVE_BUILD.md).
+
+## Accounts & cloud sync (optional SSO)
+
+Out of the box Stoop is local-only with no login. Drop in a Supabase URL + anon
+key ([`docs/BACKEND_SETUP.md`](docs/BACKEND_SETUP.md)) and it gains:
+
+- **Sign in with Apple / Google** (and an optional email magic link) on a login
+  screen, gating the app.
+- **Per-user cloud sync** — every detail (calibration, day stats, bend tests,
+  moves, settings) saved to your account and restored on any device or after a
+  reinstall. It's offline-first: `localStorage` stays the working copy and syncs
+  in the background, last-write-wins across devices.
+
+With no credentials configured, none of this appears and the app behaves exactly
+as it always has.
+
 ## Honest limitations
 
 - A browser tab can only watch your posture **while it's open and
   on-screen** — background monitoring and true OS-level overlay
-  notifications need a native wrapper (the UI says so too).
+  notifications need the native (Capacitor) app.
 - "Phone usage time" is therefore *monitored* time, which is exactly what
   the stoop-share stat normalises against.
-- All data stays in `localStorage`. No accounts, no servers.
+- Without a backend configured, all data stays in `localStorage` — no
+  accounts, no servers. Add Supabase credentials to enable SSO login and
+  per-user cloud sync (see above); data is then private to your account and
+  protected by row-level security.
 - The bend test's pose model + wasm are fetched once from a CDN
   (`@mediapipe/tasks-vision`) and then cached by the browser; the **camera
   frames themselves never leave the device** — all inference is on-device.
@@ -73,4 +108,7 @@ motion permission on a button tap during setup.
   green/amber/orange/red) validated for lightness band, chroma, CVD
   separation and surface contrast; the amber zone sits below 3:1 on white so
   it always ships with a direct label.
-- No build step, no framework: vanilla ES modules + SVG, installable PWA.
+- No build step, no framework: vanilla ES modules + SVG, installable PWA. The
+  native apps reuse the exact same assets via Capacitor; the Supabase SDK is
+  vendored to a single self-contained file (`npm run vendor:supabase`) so even
+  the auth/sync layer stays buildless at runtime.

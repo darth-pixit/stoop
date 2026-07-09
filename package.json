@@ -1,0 +1,32 @@
+{
+  "name": "stoop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stoop — a playful tech-neck coach. Web (PWA) + native iOS/Android via Capacitor.",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8000 --directory www",
+    "vendor:supabase": "node scripts/vendor-supabase.mjs",
+    "sync": "cap sync",
+    "copy": "cap copy",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android",
+    "add:ios": "cap add ios",
+    "add:android": "cap add android",
+    "build:ios": "cap sync ios && cap open ios",
+    "build:android": "cap sync android && cap open android"
+  },
+  "dependencies": {
+    "@capacitor/app": "^6.0.0",
+    "@capacitor/browser": "^6.0.0",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2",
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/splash-screen": "^6.0.0",
+    "@supabase/supabase-js": "^2.45.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "esbuild": "^0.23.1"
+  }
+}

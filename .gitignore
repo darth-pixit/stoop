@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Capacitor native projects — generated per-machine with `npx cap add ios/android`.
+# Keeping them out of git avoids committing the huge Xcode/Gradle scaffolds and
+# machine-specific paths. Regenerate locally; see docs/NATIVE_BUILD.md.
+/ios/
+/android/
+
+# Local secrets — real Supabase/OAuth values live here, never committed.
+www/js/config.local.js
+.env
+.env.*
+
+# esbuild vendoring scratch
+scripts/.supabase-entry.mjs
+
+# OS / editor cruft
+.DS_Store
+*.log
