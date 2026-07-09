@@ -394,6 +394,7 @@ button { font-family: inherit; color: inherit; }
 }
 .form-verdict.ok { background: var(--zone-upright-soft); color: #14712B; }
 .form-verdict.warn { background: var(--coral-soft); color: #A83225; }
+.fx-result-actions { display: grid; gap: 10px; margin-top: 16px; }
 
 .checkin-banner {
   margin: 12px 0 0; border-radius: var(--radius); padding: 16px 18px;

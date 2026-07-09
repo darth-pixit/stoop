@@ -442,7 +442,10 @@ export function startTest({ embedded = null, onDone = null } = {}) {
           ? '✅ Shoulders stayed heavy the whole time — clean, honest reading.'
           : '🙈 A shoulder crept up during the test — we didn\'t count the shrug, but a cleaner redo will read truer.'}
       </div>
-      <div class="monitor-row"><button class="btn coral block" id="fx-log">Log it 📌</button></div>
+      <div class="fx-result-actions">
+        <button class="btn coral block" id="fx-log">Log it 📌</button>
+        <button class="btn ghost block" id="fx-retake">🔄 Re-take the test</button>
+      </div>
     `;
     let close2 = null;
     let rootEl;
@@ -466,6 +469,11 @@ export function startTest({ embedded = null, onDone = null } = {}) {
       onDone?.(results);
       const view = document.getElementById('view-flex');
       if (!embedded && view && !view.classList.contains('hidden')) render(view);
+    });
+    // Secondary: throw this reading away and run a fresh test in the same spot.
+    rootEl.querySelector('#fx-retake').addEventListener('click', () => {
+      close2?.();                      // drop the results sheet (sheet mode)
+      startTest({ embedded, onDone }); // fresh run, same context — nothing logged
     });
   }
 
