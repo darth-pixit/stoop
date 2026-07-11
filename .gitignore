@@ -1,11 +1,10 @@
 # Dependencies
 node_modules/
 
-# Capacitor native projects — generated per-machine with `npx cap add ios/android`.
-# Keeping them out of git avoids committing the huge Xcode/Gradle scaffolds and
-# machine-specific paths. Regenerate locally; see docs/NATIVE_BUILD.md.
-/ios/
-/android/
+# Capacitor native projects (ios/, android/) ARE committed — the stoop:// deep
+# link and camera/motion permissions are pre-wired in them. Each folder ships
+# its own .gitignore excluding build outputs, Pods, and cap-sync-copied assets.
+# Run `npx cap sync` after cloning to populate those before building.
 
 # Local secrets — real Supabase/OAuth values live here, never committed.
 www/js/config.local.js

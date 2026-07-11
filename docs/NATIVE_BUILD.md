@@ -18,29 +18,20 @@ www/  ──►  Capacitor  ──►  ios/App/App.xcworkspace   (→ TestFlight
 | iOS | macOS, **Xcode** 15+, CocoaPods (`sudo gem install cocoapods`), an Apple Developer account ($99/yr) |
 | Android | **Android Studio** (bundles the SDK + JDK); a Google Play Developer account ($25 once) for Play distribution |
 
-> The native platform folders (`ios/`, `android/`) are **not committed** — they
-> are generated per-machine (see `.gitignore`). Everything below regenerates
-> them from the committed config.
+> The native platform folders (`ios/`, `android/`) **are committed**, with the
+> `stoop://` deep link and camera/motion permissions already wired in. Build
+> outputs, Pods, and cap-sync-copied assets are excluded by each folder's own
+> `.gitignore`, so after cloning you populate those with `npx cap sync`.
 
-## 1. Install and vendor
+## 1. Install and sync
 
 ```bash
 npm install
-npm run vendor:supabase        # bundles the Supabase SDK into www/js/vendor/supabase.js
+npx cap sync          # copies www/ into both projects + wires native plugins
 ```
 
-`www/js/vendor/supabase.js` is committed, so this is only needed after bumping
-the SDK version in `package.json`.
-
-## 2. Add the native platforms
-
-```bash
-npx cap add ios
-npx cap add android
-```
-
-This reads `capacitor.config.ts` (appId `app.stoop.mobile`, appName `Stoop`,
-`webDir: www`) and scaffolds both projects.
+(`npm run vendor:supabase` re-bundles the Supabase SDK into
+`www/js/vendor/supabase.js`; only needed after bumping the SDK version.)
 
 Whenever you change anything in `www/`, copy it into the native projects:
 
@@ -49,12 +40,13 @@ npx cap copy          # push web assets only (fast)
 npx cap sync          # copy + update native plugins (after npm install changes)
 ```
 
-## 3. Register the SSO deep link (`stoop://auth/callback`)
+## 2. What's already wired (reference)
 
-Native Sign in with Apple / Google opens the system browser and returns to the
-app via a custom URL scheme. Register `stoop` in each platform.
+Native SSO opens the system browser and returns to the app via the `stoop`
+custom URL scheme — registered in both projects, so nothing to do here. For
+reference:
 
-### iOS — `ios/App/App/Info.plist`
+### iOS — `ios/App/App/Info.plist` (done)
 
 ```xml
 <key>CFBundleURLTypes</key>
@@ -66,13 +58,10 @@ app via a custom URL scheme. Register `stoop` in each platform.
 </array>
 ```
 
-Then in Xcode select the **App** target → **Signing & Capabilities** → **+
-Capability** → **Sign in with Apple**. Set the bundle identifier to the App ID
-you created in [BACKEND_SETUP.md](./BACKEND_SETUP.md) (e.g. `app.stoop.mobile`).
+Also present: `NSCameraUsageDescription` (bend test) and
+`NSMotionUsageDescription` (tilt monitoring).
 
-### Android — `android/app/src/main/AndroidManifest.xml`
-
-Inside the main `<activity>`:
+### Android — `android/app/src/main/AndroidManifest.xml` (done)
 
 ```xml
 <intent-filter>
@@ -83,10 +72,19 @@ Inside the main `<activity>`:
 </intent-filter>
 ```
 
+Also present: the `CAMERA` permission for the bend test.
+
+### Still manual (Xcode, only when Apple SSO is enabled)
+
+When you turn on Sign in with Apple (see BACKEND_SETUP.md), select the **App**
+target in Xcode → **Signing & Capabilities** → **+ Capability** → **Sign in
+with Apple**, and set the bundle identifier to your App ID
+(`app.stoop.mobile`). Not needed while the login is Google-only.
+
 Make sure the Supabase project lists `stoop://auth/callback` under
 **Authentication → URL Configuration → Redirect URLs**.
 
-## 4. App icon & splash (optional but recommended)
+## 3. App icon & splash (optional but recommended)
 
 Generate all sizes from a single source image with the official tool:
 
@@ -96,7 +94,7 @@ npx @capacitor/assets generate --iconBackgroundColor '#FAF6EF' --splashBackgroun
 
 (Provide `assets/icon.png` @ 1024×1024 and `assets/splash.png` @ 2732×2732.)
 
-## 5. Run on a simulator / device
+## 4. Run on a simulator / device
 
 ```bash
 npx cap open ios        # opens Xcode → pick a simulator/device → ▶
@@ -106,7 +104,7 @@ npx cap open android    # opens Android Studio → pick an emulator/device → �
 The camera (bend test), motion sensors and notifications behave like a real app
 here — including background-capable behaviour the browser can't offer.
 
-## 6. Distribute to beta testers — without Expo
+## 5. Distribute to beta testers — without Expo
 
 ### iOS → TestFlight
 
@@ -138,7 +136,7 @@ firebase appdistribution:distribute app-release.apk \
 
 Testers install directly from an email invite.
 
-## 7. Updating a beta build
+## 6. Updating a beta build
 
 1. Edit the web app in `www/` (or pull new commits).
 2. `npm run vendor:supabase` only if the SDK version changed.
