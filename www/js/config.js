@@ -12,8 +12,8 @@
 // extra network request. See docs/BACKEND_SETUP.md for the full walkthrough.
 
 const DEFAULT = {
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  supabaseUrl: 'https://vzlthjhgxswqtzgbjcox.supabase.co',
+  supabaseAnonKey: 'sb_publishable_pN1DfyFGHxkiHv4O60gFaQ_K1MLl2HE',
 
   // Which SSO buttons to show on the login screen.
   providers: { apple: true, google: true, email: false },
