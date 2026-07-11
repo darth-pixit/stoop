@@ -11,6 +11,8 @@ const DEFAULTS = {
   days: {},               // 'YYYY-MM-DD' → { phoneMs, stoopMs, zoneMs: {mild,moderate,severe} }
   flexLogs: [],           // { iso, left, right, quality: 'clean'|'retake' }
   exerciseLogs: [],       // { iso, id, name, emoji, amount }
+  updatedAt: 0,           // ms epoch of last local change — drives cloud last-write-wins
+  ownerId: null,          // Supabase user id this state belongs to (null = guest/local)
 };
 
 let state = load();
@@ -23,11 +25,25 @@ function load() {
   return structuredClone(DEFAULTS);
 }
 
+// Two change channels: local edits push to the cloud; remote snapshots refresh
+// the UI. Keeping them separate stops a pulled snapshot from echoing back up.
+const changeListeners = new Set();   // local edit committed → sync should push
+const hydrateListeners = new Set();  // remote snapshot applied → views refresh
+
+export function onChange(fn) { changeListeners.add(fn); return () => changeListeners.delete(fn); }
+export function onHydrate(fn) { hydrateListeners.add(fn); return () => hydrateListeners.delete(fn); }
+
+function writeNow({ stamp = true } = {}) {
+  if (stamp) state.updatedAt = Date.now();
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* quota — keep running in-memory */ }
+}
+
 let saveTimer = null;
 export function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* quota — keep running in-memory */ }
+    writeNow();
+    for (const fn of changeListeners) { try { fn(state); } catch { /* listener error */ } }
   }, 250);
 }
 
@@ -38,9 +54,25 @@ export function set(patch) {
   save();
 }
 
+// Replace local state wholesale with a remote snapshot. Does NOT push back up;
+// notifies hydrate listeners so open views re-render with the pulled data.
+export function hydrate(remote) {
+  clearTimeout(saveTimer);
+  state = { ...structuredClone(DEFAULTS), ...remote };
+  writeNow({ stamp: false });
+  for (const fn of hydrateListeners) { try { fn(state); } catch { /* listener error */ } }
+}
+
+export function getUpdatedAt() { return state.updatedAt || 0; }
+export function getOwner() { return state.ownerId || null; }
+export function setOwner(id) { state.ownerId = id; writeNow({ stamp: false }); }
+
 export function resetAll() {
+  const owner = state.ownerId || null;      // keep the account link so the wipe syncs up
   state = structuredClone(DEFAULTS);
-  try { localStorage.removeItem(KEY); } catch { /* ignore */ }
+  state.ownerId = owner;
+  writeNow();                                // persist an empty, freshly-stamped state
+  for (const fn of changeListeners) { try { fn(state); } catch { /* listener error */ } }
 }
 
 // ── day aggregates ──────────────────────────────────────────────

@@ -1,10 +1,14 @@
-// App bootstrap: routing, onboarding gate, settings sheet, check-in banner.
+// App bootstrap: routing, auth/login gate, onboarding, settings, check-in banner.
 import * as store from './store.js';
 import * as sensors from './sensors.js';
 import * as monitor from './monitor.js';
 import * as stats from './stats.js';
 import * as exercises from './exercises.js';
 import * as flex from './flex.js';
+import * as auth from './auth.js';
+import * as sync from './sync.js';
+import { CONFIG, isConfigured } from './config.js';
+import { renderLogin } from './login.js';
 import { runOnboarding } from './onboarding.js';
 import { calibrationWidget } from './calibrate.js';
 import { sheet, toast } from './ui.js';
@@ -53,13 +57,49 @@ function renderBanner(activeTab) {
 }
 
 // ── settings ────────────────────────────────────────────────────
+// Account block: signed-in identity + live sync status, or a prompt to sign in.
+function accountSectionHTML() {
+  if (!isConfigured()) return '';
+  const u = auth.currentUser();
+  if (u) {
+    const av = u.avatar
+      ? `<img class="account-av" src="${u.avatar}" alt="">`
+      : `<span class="account-av">🙂</span>`;
+    return `
+      <div class="card" style="margin-top:10px">
+        <div class="account-row">
+          ${av}
+          <div class="account-meta">
+            <b>${u.name || 'Signed in'}</b>
+            <small>${u.email || (u.provider ? `via ${u.provider}` : '')}</small>
+            <small id="sync-status"><span class="sync-dot ${sync.getStatus()}"></span>${syncLabel(sync.getStatus())}</small>
+          </div>
+          <button class="btn ghost small" id="set-signout">Sign out</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="card" style="margin-top:10px">
+      <div class="set-row">
+        <div class="sr-label"><b>Sign in to sync</b><small>Keep your streaks, calibration and bend tests on every device.</small></div>
+        <button class="btn primary small" id="set-signin">Sign in</button>
+      </div>
+    </div>`;
+}
+
+function syncLabel(s) {
+  return { synced: 'Synced to your account', syncing: 'Syncing…', offline: 'Offline — will sync later', error: 'Sync paused', idle: 'Local only' }[s] || 'Local only';
+}
+
 function openSettings() {
   const s = store.get();
+  let unsubStatus = null;
   const { el, close } = sheet(`
     <div class="sheet-head">
       <h3>⚙️ Settings</h3>
       <button class="btn ghost small" data-close>Done</button>
     </div>
+    ${accountSectionHTML()}
     <div class="card" style="margin-top:10px">
       <div class="set-row">
         <div class="sr-label"><b>Live stoop notifications</b><small>A silent nudge after ~10s of sustained stooping (while Stoop is open).</small></div>
@@ -78,8 +118,25 @@ function openSettings() {
         <button class="btn ghost small" id="set-reset" style="color:var(--zone-severe);border-color:var(--zone-severe-soft)">Reset</button>
       </div>
     </div>
-    <p class="sub" style="padding:0 6px">Stoop is a web app: it can only watch your angle while it's open and on-screen, and all data stays in this browser. Strain figures follow Hansraj (2014) — playful, not medical advice. 💛</p>
-  `);
+    <p class="sub" style="padding:0 6px">${isConfigured()
+      ? 'Your posture data is saved privately to your account and synced across your devices. '
+      : 'All data stays on this device. '}Strain figures follow Hansraj (2014) — playful, not medical advice. 💛</p>
+  `, { onClose: () => unsubStatus?.() });
+
+  // account: live sync dot + sign in / sign out
+  if (isConfigured() && auth.currentUser()) {
+    unsubStatus = sync.onStatus((st) => {
+      const node = el.querySelector('#sync-status');
+      if (node) node.innerHTML = `<span class="sync-dot ${st}"></span>${syncLabel(st)}`;
+    });
+  }
+  el.querySelector('#set-signin')?.addEventListener('click', () => { close(); showLogin(); });
+  el.querySelector('#set-signout')?.addEventListener('click', async () => {
+    if (!confirm('Sign out of Stoop on this device?')) return;
+    await sync.flush().catch(() => {});
+    await auth.signOut();
+    location.reload();
+  });
 
   el.querySelector('#set-notif').addEventListener('change', async (e) => {
     if (e.target.checked && 'Notification' in window && Notification.permission === 'default') {
@@ -114,15 +171,56 @@ function openSettings() {
     showTab('stats');
   });
 
-  el.querySelector('#set-reset').addEventListener('click', () => {
+  el.querySelector('#set-reset').addEventListener('click', async () => {
     if (!confirm('Wipe all Stoop data and start over?')) return;
     store.resetAll();
+    await sync.flush().catch(() => {}); // push the wipe up before we reload
     location.reload();
   });
 }
 
+// ── app entry / login gate ──────────────────────────────────────
+let entered = false; // committed to the app (past login + onboarding gate)
+
+function enterApp() {
+  $('#login')?.classList.add('hidden');
+  $('#onboarding').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  sensors.start();
+  showTab('now');
+}
+
+// Move past the login gate into onboarding (first run) or the app.
+function proceed() {
+  if (entered) return;
+  entered = true;
+  $('#login')?.classList.add('hidden');
+  if (store.get().setupDone) {
+    enterApp();
+  } else {
+    $('#onboarding').classList.remove('hidden');
+    runOnboarding($('#onboarding'), enterApp);
+  }
+}
+
+function showLogin() {
+  $('#app').classList.add('hidden');
+  $('#onboarding').classList.add('hidden');
+  renderLogin($('#login'), {
+    onSkip: CONFIG.requireLogin ? null : () => { $('#login').classList.add('hidden'); proceed(); },
+  });
+}
+
+// Re-render whatever view is on screen (e.g. after a cloud pull hydrates state).
+function refreshVisibleViews() {
+  if ($('#app').classList.contains('hidden')) return;
+  for (const v of Object.values(VIEWS)) v.rendered = false;
+  const active = document.querySelector('.tabbar .tab.active')?.dataset.tab || 'now';
+  showTab(active);
+}
+
 // ── boot ────────────────────────────────────────────────────────
-function boot() {
+async function boot() {
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
@@ -134,19 +232,36 @@ function boot() {
   $('#btn-settings').addEventListener('click', openSettings);
   document.getElementById('live-pill').addEventListener('click', () => showTab('now'));
 
-  const enterApp = () => {
-    $('#onboarding').classList.add('hidden');
-    $('#app').classList.remove('hidden');
-    sensors.start();
-    showTab('now');
-  };
+  // A cloud pull replaces local state → refresh any open view.
+  store.onHydrate(refreshVisibleViews);
 
-  if (store.get().setupDone) {
-    enterApp();
+  await auth.init();
+  sync.init();
+
+  const needLogin = isConfigured() && CONFIG.requireLogin;
+  let bootHandled = false;
+
+  // Sign-ins that happen after boot (login screen or settings "Sign in").
+  auth.onAuthChange((user) => {
+    if (!bootHandled || !user) return;
+    $('#login')?.classList.add('hidden');
+    if (!entered) {
+      sync.waitForFirstSync().then(proceed);
+    } else {
+      $('#app').classList.remove('hidden'); // guest upgraded to an account
+      refreshVisibleViews();
+    }
+  });
+
+  if (auth.currentUser()) {
+    await sync.waitForFirstSync(); // pull this user's cloud data before deciding
+    proceed();
+  } else if (needLogin) {
+    showLogin();
   } else {
-    $('#onboarding').classList.remove('hidden');
-    runOnboarding($('#onboarding'), enterApp);
+    proceed(); // no backend configured, or optional-login guest
   }
+  bootHandled = true;
 }
 
 boot();
