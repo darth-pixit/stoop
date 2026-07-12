@@ -32,7 +32,7 @@ export function calibrationWidget(container, onDone) {
         : store.get().calibBeta;
       // clamp to a sane hold — nobody's "good posture" is a phone flat on a table
       const calibBeta = Math.min(95, Math.max(45, avg));
-      store.set({ calibBeta });
+      store.set({ calibBeta, calibrated: true });
       onDone(calibBeta);
     }, 1300);
   });

@@ -65,7 +65,8 @@ button { font-family: inherit; color: inherit; }
 .app { max-width: 520px; margin: 0 auto; padding: 0 16px calc(96px + env(safe-area-inset-bottom)); }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 18px 4px 10px;
+  /* keep clear of the notch / status bar on device (viewport-fit=cover) */
+  padding: calc(14px + env(safe-area-inset-top)) 4px 10px;
   position: sticky; top: 0; z-index: 30;
   background: linear-gradient(var(--page) 85%, rgba(250,246,239,0));
 }
@@ -170,12 +171,13 @@ button { font-family: inherit; color: inherit; }
   background: radial-gradient(closest-side, var(--halo, var(--teal-soft)) 0%, rgba(255,255,255,0) 100%);
   transition: background 1s ease; pointer-events: none;
 }
-.figure-stage { position: relative; display: grid; place-items: center; min-height: 300px; }
-.figure-stage svg { width: min(320px, 82vw); height: auto; display: block; }
+.figure-stage { position: relative; display: grid; place-items: center; min-height: 246px; }
+.figure-stage svg { width: min(272px, 72vw); height: auto; display: block; }
 
 .angle-readout { text-align: center; margin-top: -6px; position: relative; }
-.angle-big { font-size: 54px; font-weight: 900; letter-spacing: -2px; line-height: 1; }
-.angle-big .deg { font-size: 28px; vertical-align: 14px; color: var(--ink-3); font-weight: 800; }
+.angle-big { font-size: 48px; font-weight: 900; letter-spacing: -2px; line-height: 1; }
+.angle-big .deg { font-size: 26px; vertical-align: 12px; color: var(--ink-3); font-weight: 800; }
+.calib-chip { margin-top: 12px; }
 .zone-tag {
   display: inline-flex; align-items: center; gap: 7px;
   border-radius: 999px; padding: 7px 15px; font-weight: 800; font-size: 13.5px;
@@ -204,7 +206,7 @@ button { font-family: inherit; color: inherit; }
 
 /* live pill */
 .live-pill {
-  position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  position: fixed; top: calc(12px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
   z-index: 60; display: flex; align-items: center; gap: 10px;
   background: var(--ink); color: #fff; border-radius: 999px;
   padding: 9px 18px 9px 12px; box-shadow: var(--shadow-pop);
@@ -413,8 +415,9 @@ button { font-family: inherit; color: inherit; }
     radial-gradient(800px 400px at -8% 20%, #E9F6F1 0%, rgba(233,246,241,0) 55%),
     var(--page);
 }
-.ob-step { max-width: 480px; margin: 0 auto; padding: 40px 24px calc(32px + env(safe-area-inset-bottom)); min-height: 100dvh; display: flex; flex-direction: column; }
-.ob-dots { display: flex; gap: 7px; justify-content: center; margin-bottom: 26px; }
+.ob-step { max-width: 480px; margin: 0 auto; padding: calc(24px + env(safe-area-inset-top)) 24px calc(20px + env(safe-area-inset-bottom)); min-height: 100dvh; display: flex; flex-direction: column; }
+/* progress dots sit at the bottom of the page, just above the CTA */
+.ob-dots { display: flex; gap: 7px; justify-content: center; margin-top: auto; padding-top: 20px; }
 .ob-dots i { width: 8px; height: 8px; border-radius: 50%; background: #E4DED2; transition: all .3s ease; }
 .ob-dots i.on { background: var(--coral); width: 24px; border-radius: 5px; }
 .ob-art { display: grid; place-items: center; margin: 8px 0 20px; }
@@ -422,7 +425,12 @@ button { font-family: inherit; color: inherit; }
 .ob-step h1 { font-size: 32px; font-weight: 900; letter-spacing: -1px; margin: 0 0 10px; line-height: 1.12; }
 .ob-step h1 .accent { color: var(--coral); }
 .ob-step p.lead { color: var(--ink-2); font-size: 15.5px; line-height: 1.6; margin: 0 0 18px; }
-.ob-foot { margin-top: auto; display: grid; gap: 10px; padding-top: 22px; }
+.ob-bullets { display: grid; gap: 9px; margin: 2px 0 14px; }
+.ob-bullets span {
+  background: var(--card); border: 1px solid rgba(46,42,59,.05); border-radius: var(--radius-sm);
+  padding: 11px 14px; font-size: 14.5px; font-weight: 700; color: var(--ink-2);
+}
+.ob-foot { display: grid; gap: 10px; padding-top: 14px; }
 .ob-skip { background: none; border: 0; color: var(--ink-3); font-weight: 700; font-size: 13.5px; cursor: pointer; padding: 8px; }
 .ob-check-row {
   display: flex; gap: 10px; align-items: flex-start; background: var(--card);
@@ -434,7 +442,8 @@ button { font-family: inherit; color: inherit; }
 
 /* login / SSO */
 .login-step { justify-content: center; text-align: center; }
-.login-mark { font-size: 44px; margin-bottom: 14px; }
+.login-mark { display: grid; place-items: center; height: 72px; margin-bottom: 16px; }
+.login-mark .logo-mark { transform: scale(1.9); }
 .login-step h1 { text-align: center; }
 .login-step p.lead { text-align: center; }
 .sso-list { display: grid; gap: 11px; margin: 8px 0 4px; }

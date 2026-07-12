@@ -2,6 +2,8 @@
 // baseline flexibility test, pick a check-in day.
 import * as sensors from './sensors.js';
 import * as store from './store.js';
+import * as pose from './pose.js';
+import * as notify from './notify.js';
 import { strainKg, zoneFor, equivalentFor } from './strain.js';
 import { createSideFigure, addTicker } from './figure.js';
 import { calibrationWidget } from './calibrate.js';
@@ -14,18 +16,32 @@ export function runOnboarding(rootEl, onFinish) {
   let step = 0;
   let stopAnim = null;
   let flexDone = false;
+  let lastNav = -1000;
 
   const steps = [stepWelcome, stepPhysics, stepCalibrate, stepFlex, stepSchedule, stepReady];
 
   function go(n) {
+    // One step per gesture: if the webview ever replays a burst of queued
+    // taps (seen after the OAuth browser hand-back), don't let it blow
+    // through permission/calibration screens invisibly. Replayed queues
+    // dispatch within a few ms; deliberate fast taps stay above ~150ms.
+    const now = performance.now();
+    if (now - lastNav < 120) return;
+    lastNav = now;
+
     stopAnim?.(); stopAnim = null;
     step = Math.max(0, Math.min(steps.length - 1, n));
     rootEl.innerHTML = '';
     const wrap = document.createElement('div');
     wrap.className = 'ob-step';
-    wrap.innerHTML = `<div class="ob-dots">${steps.map((_, i) => `<i class="${i === step ? 'on' : ''}"></i>`).join('')}</div>`;
     rootEl.appendChild(wrap);
     steps[step](wrap);
+    // progress dots live at the bottom, just above the CTA
+    const dots = document.createElement('div');
+    dots.className = 'ob-dots';
+    dots.innerHTML = steps.map((_, i) => `<i class="${i === step ? 'on' : ''}"></i>`).join('');
+    const f = wrap.querySelector('.ob-foot');
+    if (f) wrap.insertBefore(dots, f); else wrap.appendChild(dots);
     rootEl.scrollTop = 0;
   }
 
@@ -38,6 +54,7 @@ export function runOnboarding(rootEl, onFinish) {
     f.querySelector('.btn').addEventListener('click', onNext);
     f.querySelector('.ob-skip')?.addEventListener('click', () => go(step + 1));
     wrap.appendChild(f);
+    return f;
   }
 
   // 1 ── welcome
@@ -45,7 +62,12 @@ export function runOnboarding(rootEl, onFinish) {
     wrap.insertAdjacentHTML('beforeend', `
       <div class="ob-art" id="ob-art"></div>
       <h1>Meet <span class="accent">stoop.</span></h1>
-      <p class="lead">Your phone knows exactly how far you're hunching over it. Stoop turns that into a friendly little coach — live strain readouts, playful nudges, and stretches that actually stick.</p>
+      <p class="lead">Your phone knows exactly how far you hunch over it.</p>
+      <div class="ob-bullets">
+        <span>📐 Live strain readout</span>
+        <span>🔔 Playful nudges</span>
+        <span>🤸 Stretches that stick</span>
+      </div>
     `);
     const fig = createSideFigure(wrap.querySelector('#ob-art'), { showWeight: true });
     stopAnim = addTicker((t) => {
@@ -60,7 +82,7 @@ export function runOnboarding(rootEl, onFinish) {
     wrap.insertAdjacentHTML('beforeend', `
       <div class="ob-art" id="ob-art2"></div>
       <h1>Your head weighs <span class="accent">5 kg</span>…</h1>
-      <p class="lead" id="ob-kg-line">…until you tilt it. At 60° of scroll-slump your neck is holding <b>27 kg</b> — like ${equivalentFor(27)} hanging off your spine. All day.</p>
+      <p class="lead">…until you tilt it. At 60° your neck holds <b>27 kg</b> — like ${equivalentFor(27)}.</p>
     `);
     const fig = createSideFigure(wrap.querySelector('#ob-art2'), { showWeight: true });
     stopAnim = addTicker((t) => {
@@ -74,56 +96,49 @@ export function runOnboarding(rootEl, onFinish) {
   function stepCalibrate(wrap) {
     wrap.insertAdjacentHTML('beforeend', `
       <h1>Teach me your <span class="accent">good</span> posture</h1>
-      <p class="lead">I compare every scroll to this hold — so the angle you see is <em>your</em> slump, not a generic one.</p>
+      <p class="lead">Hold the phone like you're sitting tall — every scroll is compared to that.</p>
       <div id="ob-cal-zone"></div>
     `);
     const zone = wrap.querySelector('#ob-cal-zone');
-    const btnWrap = document.createElement('div');
-    btnWrap.innerHTML = '<button class="btn primary block">🎛️ Enable motion sensors</button>';
-    zone.appendChild(btnWrap);
-    btnWrap.querySelector('button').addEventListener('click', async () => {
-      const ok = await sensors.requestPermission();
-      sensors.start();
-      if (!ok) toast('No worries — you can grant it later in Settings');
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {});
-      }
-      btnWrap.remove();
-      calibrationWidget(zone, (beta) => {
-        toast(`Calibrated at ${Math.round(beta)}° — that's your happy place 🌤️`);
-        go(3);
-      });
+    const f = foot(wrap, {
+      next: '🎛️ Enable motion sensors',
+      onNext: async () => {
+        const ok = await sensors.requestPermission();
+        sensors.start();
+        if (!ok) toast('No worries — you can grant it later in Settings');
+        notify.requestPermission().catch(() => {});
+        f.querySelector('.btn').remove(); // the widget brings its own capture CTA
+        calibrationWidget(zone, (beta) => {
+          toast(`Calibrated at ${Math.round(beta)}° — that's your happy place 🌤️`);
+          go(3);
+        });
+      },
+      skip: 'Skip — use the default hold',
     });
-    foot(wrap, { next: 'Skip for now', onNext: () => go(3), skip: null });
-    // make the primary foot button a quiet skip on this step
-    const footBtn = wrap.querySelector('.ob-foot .btn');
-    footBtn.className = 'ob-skip';
-    footBtn.textContent = 'Skip — use the default hold';
   }
 
   // 4 ── baseline flexibility
   function stepFlex(wrap) {
     wrap.insertAdjacentHTML('beforeend', `
       <h1>How bendy are you <span class="accent">today?</span></h1>
-      <p class="lead">A 60-second ear-to-shoulder test sets your baseline. Your front camera measures the real tilt of your head — and keeps you honest about that shoulder. We re-test weekly and you watch the number grow. 🌱</p>
+      <p class="lead">A 60-second ear-to-shoulder test sets your baseline. The front camera keeps it honest.</p>
       <div id="ob-flex-slot"></div>
     `);
+    pose.loadDetector().catch(() => {}); // warm the model while the user reads
     const slot = wrap.querySelector('#ob-flex-slot');
-    const kick = document.createElement('button');
-    kick.className = 'btn primary block';
-    kick.textContent = '📸 Take the baseline test';
-    slot.appendChild(kick);
-    kick.addEventListener('click', () => {
-      kick.remove();
-      const stage = document.createElement('div');
-      slot.appendChild(stage);
-      startTest({
-        embedded: stage,
-        onDone: () => { flexDone = true; go(4); },
-      });
+    const f = foot(wrap, {
+      next: '📸 Take the baseline test',
+      onNext: () => {
+        f.querySelector('.btn').remove(); // the test brings its own actions
+        const stage = document.createElement('div');
+        slot.appendChild(stage);
+        startTest({
+          embedded: stage,
+          onDone: () => { flexDone = true; go(4); },
+        });
+      },
+      skip: flexDone ? null : 'Skip — test me later',
     });
-    foot(wrap, { next: flexDone ? 'Continue' : 'Skip — test me later', onNext: () => go(4) });
-    wrap.querySelector('.ob-foot .btn').classList.replace('coral', 'ghost');
   }
 
   // 5 ── weekly check-in
@@ -131,7 +146,7 @@ export function runOnboarding(rootEl, onFinish) {
     const s = store.get();
     wrap.insertAdjacentHTML('beforeend', `
       <h1>Pick your <span class="accent">check-in</span> day</h1>
-      <p class="lead">Once a week Stoop asks for a fresh bend test and a round of moves. Small, regular, kind — like flossing for your neck.</p>
+      <p class="lead">Once a week, Stoop nudges you to re-test and stretch.</p>
       <div class="chip-row" style="justify-content:center" id="ob-days">
         ${WEEKDAYS.map((d, i) => `<button class="chip ${s.checkin.weekday === i ? 'active' : ''}" data-day="${i}">${d}</button>`).join('')}
       </div>
@@ -152,10 +167,10 @@ export function runOnboarding(rootEl, onFinish) {
     wrap.insertAdjacentHTML('beforeend', `
       <div class="ob-art" style="font-size:76px">🎉</div>
       <h1>You're all set</h1>
-      <p class="lead">Keep Stoop open while you scroll and it watches your angle live. The browser can't peek from the background — that superpower needs the (future) native app.</p>
+      <p class="lead">Keep Stoop open while you scroll — it reads your angle live.</p>
       <label class="ob-check-row" style="cursor:pointer">
         <input type="checkbox" id="ob-sample" style="width:20px;height:20px;accent-color:var(--coral)">
-        <span><b>Preview with sample data</b><br><small style="color:var(--ink-3)">See three weeks of pretend history — clearly marked, one tap to clear.</small></span>
+        <span><b>Preview with sample data</b><br><small style="color:var(--ink-3)">Three weeks of pretend history — one tap to clear.</small></span>
       </label>
     `);
     foot(wrap, {

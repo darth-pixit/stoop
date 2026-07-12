@@ -97,13 +97,16 @@ export async function init() {
   if (isNative() && App) {
     App.addListener('appUrlOpen', async ({ url }) => {
       if (!url || !url.includes('auth/callback')) return;
+      // Dismiss the browser BEFORE the (network-bound) token exchange.
+      // Closing it after an await races the SFSafariViewController dismissal
+      // and can leave the WKWebView render-suspended — the app looks frozen
+      // while taps still register underneath.
+      plugin('Browser')?.close?.().catch?.(() => {});
       try {
         const code = new URL(url).searchParams.get('code');
         if (code) await sb.auth.exchangeCodeForSession(code);
       } catch (e) {
         console.warn('[auth] callback exchange failed', e);
-      } finally {
-        plugin('Browser')?.close?.().catch?.(() => {});
       }
     });
   }
