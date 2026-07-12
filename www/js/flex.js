@@ -135,6 +135,9 @@ function renderHistory() {
 // Phases per side: position → baseline → tilt → locked. Then results.
 const CREEP_GATE = 0.10;    // shoulder rise (× shoulder-width) that counts as a shrug
 const REAL_BEND = 8;        // ° below which we don't consider it a bend yet
+const PLATEAU_BAND = 3;     // ° window below the running max that counts as "holding it"
+const HOLD_MS = 1500;       // a hold must last this long…
+const HOLD_SAMPLES = 10;    // …and gather at least this many in-band readings to log
 
 export function startTest({ embedded = null, onDone = null } = {}) {
   const results = { right: null, left: null };
@@ -147,7 +150,15 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   let plateauMaxRef = 0;
   let phaseEnteredAt = performance.now();
   const buf = [];          // rolling {t, roll} for rate/stability checks
+  const holdBuf = [];      // in-band readings during a hold — their mean is what we log
   let closed = false;
+
+  // Raw pose readings flutter even on a frozen subject. Smooth both signals so
+  // the readout holds steady and noise spikes can't restart the hold timer or
+  // falsely latch the shrug flag — the filter is adaptive, so a real bend
+  // still tracks essentially lag-free.
+  const rollSmooth = pose.createSmoother();
+  const creepSmooth = pose.createSmoother();
 
   // camera / sim plumbing
   let stream = null;
@@ -260,8 +271,10 @@ export function startTest({ embedded = null, onDone = null } = {}) {
       sample = r.ok
         ? {
             framed: true,
-            roll: r.rollDeg,
-            creep: base ? Math.abs(r.shoulderTiltY - base.shoulderTiltY) / base.shoulderWidth : 0,
+            roll: rollSmooth.push(r.rollDeg, ts),
+            creep: base
+              ? creepSmooth.push(Math.abs(r.shoulderTiltY - base.shoulderTiltY) / base.shoulderWidth, ts)
+              : 0,
             read: r,
           }
         : { framed: false };
@@ -286,7 +299,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
     while (buf.length && now - buf[0].t > 1000) buf.shift();
 
     const eff = base ? Math.abs(sample.roll - base.roll) : 0;
-    const shown = phase === 'locked' ? maxTilt : eff;
+    const shown = phase === 'locked' ? results[side] : eff;
     q('#fx-angle').textContent = Math.round(shown);
 
     q('#fx-creep').classList.toggle('hidden', !(phase === 'tilt' && sample.creep > CREEP_GATE));
@@ -347,6 +360,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
       shoulderWidth: sample.read ? sample.read.shoulderWidth : 1,
       eyeMidY: sample.read ? sample.read.eyeMidY : 0.4,
     };
+    creepSmooth.reset(); // creep is measured against the base we just took
     maxTilt = 0;
     clean[side] = true;
     setPhase('tilt');
@@ -378,16 +392,20 @@ export function startTest({ embedded = null, onDone = null } = {}) {
       return;
     }
 
-    // plateau near personal max → lock after a steady hold. The max must stop
-    // GROWING too, else a slow climb would lock early.
-    if (maxTilt > REAL_BEND && eff > maxTilt - 3) {
+    // plateau near personal max → collect the held readings and lock on their
+    // AVERAGE, not the single highest frame (a raw max rides noise upward; the
+    // mean of a steady window is the honest number). The max must stop GROWING
+    // too, else a slow climb would lock early.
+    if (maxTilt > REAL_BEND && eff > maxTilt - PLATEAU_BAND) {
       if (plateauSince == null || maxTilt > plateauMaxRef + 1.5) {
         plateauSince = now;
         plateauMaxRef = maxTilt;
+        holdBuf.length = 0;
       }
+      holdBuf.push(eff);
       const held = now - plateauSince;
-      if (held > 1500) lockSide();
-      else nudge(`Hold it there… ${Math.ceil((1500 - held) / 500)} 🫸`, 'ok');
+      if (held > HOLD_MS && holdBuf.length >= HOLD_SAMPLES) lockSide();
+      else nudge(`Hold it there… ${Math.max(1, Math.ceil((HOLD_MS - held) / 500))} 🫸`, 'ok');
     } else {
       plateauSince = null;
       if (eff > 4) nudge('Nice — keep sinking until you feel the far side wake up 🌊');
@@ -395,7 +413,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   }
 
   function lockSide() {
-    results[side] = Math.round(maxTilt);
+    results[side] = Math.round(holdBuf.reduce((a, v) => a + v, 0) / holdBuf.length);
     setPhase('locked');
     q('#fx-angle').textContent = results[side];
     nudge(`${side === 'right' ? 'Right' : 'Left'} side: <b>${results[side]}°</b>${clean[side] ? ' — lovely bend! 🎉' : ' 🙈'}`, clean[side] ? 'ok' : 'warn');
@@ -407,6 +425,9 @@ export function startTest({ embedded = null, onDone = null } = {}) {
         maxTilt = 0;
         base = simMode ? base : null; // recapture an upright baseline for the new side
         buf.length = 0;
+        holdBuf.length = 0;
+        rollSmooth.reset();
+        creepSmooth.reset();
         q('#fx-side').textContent = 'Left side';
         q('#fx-actions').innerHTML = '';
         if (simMode) { simTilt = 0; q('#fx-sim-range').value = 0; q('#fx-sim-creep').checked = false; simCreep = 0; }
