@@ -57,11 +57,13 @@ The native apps are the same `www/` web app wrapped by
 Studio project, no rewrite and no Expo. Ship them to beta testers via TestFlight
 and Google Play internal testing.
 
+The `ios/` and `android/` projects are committed with the SSO deep link and
+camera/motion permissions already wired in:
+
 ```bash
 npm install
-npx cap add ios        # generates ios/ (gitignored)
-npx cap add android    # generates android/ (gitignored)
-npx cap copy           # after any change under www/
+npx cap sync           # populates the native projects with www/ + plugins
+npx cap open ios       # or: npx cap open android
 ```
 
 Full walkthrough — deep-link/SSO setup, icons, and beta distribution — in

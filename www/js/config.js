@@ -12,11 +12,13 @@
 // extra network request. See docs/BACKEND_SETUP.md for the full walkthrough.
 
 const DEFAULT = {
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  supabaseUrl: 'https://vzlthjhgxswqtzgbjcox.supabase.co',
+  supabaseAnonKey: 'sb_publishable_pN1DfyFGHxkiHv4O60gFaQ_K1MLl2HE',
 
-  // Which SSO buttons to show on the login screen.
-  providers: { apple: true, google: true, email: false },
+  // Which SSO buttons to show on the login screen. Apple is off until the
+  // Apple Developer setup is done (docs/BACKEND_SETUP.md §Apple) — flip it to
+  // true once the Supabase Apple provider is configured.
+  providers: { apple: false, google: true, email: false },
 
   // Deep-link scheme for the native OAuth callback. Must match the custom URL
   // scheme registered in the iOS/Android projects and capacitor.config.ts.
