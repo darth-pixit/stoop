@@ -35,6 +35,10 @@ export function zoneFor(angle) {
 }
 
 export const STOOP_THRESHOLD = 15; // ° — below this counts as upright
+// Nudge hysteresis: start stooping at ENTER, only recover at EXIT — a one-
+// sample dip to 14.9° shouldn't reset the sustain timer or close the nudge.
+export const STOOP_ENTER = 15;
+export const STOOP_EXIT = 12;
 
 // Something the reader can actually picture on their neck.
 const EQUIVALENTS = [

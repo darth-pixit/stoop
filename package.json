@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "serve": "python3 -m http.server 8000 --directory www",
+    "test": "node --test test/*.test.mjs",
     "vendor:supabase": "node scripts/vendor-supabase.mjs",
     "sync": "cap sync",
     "copy": "cap copy",

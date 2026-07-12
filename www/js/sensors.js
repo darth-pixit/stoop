@@ -3,7 +3,8 @@
 // ear-to-shoulder flexibility test no longer uses phone tilt — it watches you
 // through the front camera; see pose.js/flex.js.) Falls back to a simulation
 // source on hardware without sensors (desktop), so every screen stays usable.
-// The DeviceMotion gravity/tilt fields below are retained but currently unused.
+// gamma + the DeviceMotion gravity field feed the context tracker (context.js)
+// that decides whether a sample is judgable posture at all.
 
 const listeners = new Set();
 let running = false;
@@ -13,6 +14,7 @@ let simAngleDeg = 0; // simulated *neck* angle for monitor / tilt for flex
 
 export const reading = {
   beta: null,          // phone pitch: 0 flat on table → 90 upright
+  gamma: null,         // phone roll: ±90 on its side — context detection only
   gravity: null,       // {x,y,z} m/s² including gravity
   tiltFromVertical: 0, // ° the phone's long axis leans away from plumb
   sideways: 0,         // signed ° of that tilt in the frontal (ear-to-shoulder) plane
@@ -40,6 +42,7 @@ function onOrientation(e) {
   if (e.beta == null) return;
   sensorsSeen = true;
   reading.beta = e.beta;
+  reading.gamma = e.gamma;
   emit();
 }
 
@@ -67,6 +70,7 @@ function startSimulation() {
   simTimer = setInterval(() => {
     // For the monitor: sim slider drives neck angle → synthesize matching beta.
     reading.beta = 75 - simAngleDeg;
+    reading.gamma = 0;
     // For the flex test: sim slider drives tilt directly, clean side-bend.
     reading.tiltFromVertical = simAngleDeg;
     reading.sideways = simAngleDeg;
@@ -117,6 +121,6 @@ export function stop() {
 // every degree the phone drops below it reads as a degree of neck flexion.
 export function neckAngleFrom(beta, calibBeta) {
   if (beta == null) return null;
-  if (beta > 120 || beta < -40) return 0; // lying down / overhead — don't judge
+  if (beta > 120 || beta < -40) return null; // lying down / overhead — unjudgable, not "upright"
   return Math.max(0, Math.min(90, calibBeta - beta));
 }
