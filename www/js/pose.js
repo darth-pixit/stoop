@@ -126,3 +126,32 @@ export function readPose(video, tsMs) {
 }
 
 function xy(p) { return { x: p.x, y: p.y, v: p.visibility ?? 1 }; }
+
+// ── smoothing ─────────────────────────────────────────────────────
+// Landmarks flutter a degree or two frame-to-frame even on a frozen subject.
+// A plain moving average would steady that but lag behind a real bend; the
+// One Euro filter adapts its cutoff to speed — heavy smoothing while you hold
+// still (rock-steady readout), light smoothing while you actually move (no
+// visible lag) — so stability doesn't cost accuracy. A median-of-3 pre-stage
+// swallows single-frame detection glitches before they reach the filter.
+export function createSmoother({ minCutoff = 0.8, beta = 0.05, dCutoff = 1.0 } = {}) {
+  const win = [];                 // median-of-3 window
+  let xPrev = null, dxPrev = 0, tPrev = 0;
+  const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+  return {
+    push(raw, tMs) {
+      win.push(raw);
+      if (win.length > 3) win.shift();
+      const x = win.length < 3 ? raw : [...win].sort((a, b) => a - b)[1];
+      if (xPrev == null) { xPrev = x; tPrev = tMs; return x; }
+      const dt = Math.max(1e-3, (tMs - tPrev) / 1000);
+      tPrev = tMs;
+      const aD = alpha(dCutoff, dt);
+      dxPrev += aD * ((x - xPrev) / dt - dxPrev);
+      const a = alpha(minCutoff + beta * Math.abs(dxPrev), dt);
+      xPrev += a * (x - xPrev);
+      return xPrev;
+    },
+    reset() { win.length = 0; xPrev = null; dxPrev = 0; tPrev = 0; },
+  };
+}
