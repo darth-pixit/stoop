@@ -248,7 +248,10 @@ const tickers = new Set();
 let rafId = null;
 
 function loop(ts) {
-  for (const t of tickers) t(ts / 1000);
+  // Isolate a throwing ticker: without this, one exception aborts the loop
+  // before rafId is reassigned, leaving it truthy so addTicker never restarts
+  // it — every animation freezes permanently until reload.
+  for (const t of tickers) { try { t(ts / 1000); } catch { /* keep the loop alive */ } }
   rafId = tickers.size ? requestAnimationFrame(loop) : null;
 }
 

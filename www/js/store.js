@@ -18,10 +18,32 @@ const DEFAULTS = {
 
 let state = load();
 
+// Merge a persisted/remote blob onto the defaults WITHOUT dropping nested
+// defaults: a partial or older-schema `checkin` (missing `hour`) or a day
+// record missing `zoneMs`/`unjudgedMs` would otherwise crash Stats/check-in.
+function normalize(raw) {
+  const s = { ...structuredClone(DEFAULTS), ...(raw || {}) };
+  s.checkin = { ...DEFAULTS.checkin, ...(raw && raw.checkin) };
+  s.days = (raw && typeof raw.days === 'object' && raw.days) || {};
+  for (const k of Object.keys(s.days)) {
+    const r = s.days[k] || {};
+    s.days[k] = {
+      ...r,
+      phoneMs: r.phoneMs || 0,
+      stoopMs: r.stoopMs || 0,
+      unjudgedMs: r.unjudgedMs || 0,
+      zoneMs: { mild: 0, moderate: 0, severe: 0, ...(r.zoneMs || {}) },
+    };
+  }
+  s.flexLogs = Array.isArray(raw && raw.flexLogs) ? raw.flexLogs : [];
+  s.exerciseLogs = Array.isArray(raw && raw.exerciseLogs) ? raw.exerciseLogs : [];
+  return s;
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...structuredClone(DEFAULTS), ...JSON.parse(raw) };
+    if (raw) return normalize(JSON.parse(raw));
   } catch { /* corrupted state falls through to defaults */ }
   return structuredClone(DEFAULTS);
 }
@@ -39,13 +61,40 @@ function writeNow({ stamp = true } = {}) {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* quota — keep running in-memory */ }
 }
 
+// A pure trailing debounce starves under a continuous event stream (the ~60 Hz
+// sensor feed re-arms it every ~16 ms), so localStorage and the sync push never
+// fire during a monitoring session. Keep the 250 ms trailing coalesce but cap
+// the total wait so a write always lands within MAX_SAVE_WAIT.
+const SAVE_DEBOUNCE = 250;
+const MAX_SAVE_WAIT = 2000;
 let saveTimer = null;
-export function save() {
+let firstDirtyAt = 0;
+
+function commit() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    writeNow();
-    for (const fn of changeListeners) { try { fn(state); } catch { /* listener error */ } }
-  }, 250);
+  saveTimer = null;
+  writeNow();
+  for (const fn of changeListeners) { try { fn(state); } catch { /* listener error */ } }
+}
+
+export function save() {
+  const now = Date.now();
+  if (!saveTimer) firstDirtyAt = now;
+  clearTimeout(saveTimer);
+  const delay = Math.max(0, Math.min(SAVE_DEBOUNCE, MAX_SAVE_WAIT - (now - firstDirtyAt)));
+  saveTimer = setTimeout(commit, delay);
+}
+
+// Force any pending debounced write out synchronously (before backgrounding).
+export function flush() {
+  if (saveTimer) commit();
+}
+
+// Guarantee the working copy hits localStorage even if the app is killed mid
+// session — the sensor stream would otherwise keep the debounce perpetually open.
+if (typeof addEventListener === 'function') {
+  addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  addEventListener('pagehide', flush);
 }
 
 export function get() { return state; }
@@ -56,12 +105,80 @@ export function set(patch) {
 }
 
 // Replace local state wholesale with a remote snapshot. Does NOT push back up;
-// notifies hydrate listeners so open views re-render with the pulled data.
+// notifies hydrate listeners so open views re-render with the pulled data. Used
+// only when the remote belongs to a *different* account than this device's data.
 export function hydrate(remote) {
-  clearTimeout(saveTimer);
-  state = { ...structuredClone(DEFAULTS), ...remote };
+  clearTimeout(saveTimer); saveTimer = null;
+  state = normalize(remote);
   writeNow({ stamp: false });
   for (const fn of hydrateListeners) { try { fn(state); } catch { /* listener error */ } }
+}
+
+// ── per-key merge for same-account reconcile ────────────────────
+// The day map is a monotonically-growing per-day aggregate and the logs are
+// append-only, so a whole-blob last-write-wins overwrite silently discards the
+// losing device's data. Merge instead: max each day field (furthest-along
+// device wins per day), union the logs, and let the newer side win the scalar
+// settings. This makes reconcile idempotent (equal snapshots merge to a no-op)
+// so an hourly token-refresh pull can never roll a live session back.
+function mergeDays(a, b) {
+  const out = {};
+  for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+    const x = (a && a[k]) || {}; const y = (b && b[k]) || {};
+    out[k] = {
+      phoneMs: Math.max(x.phoneMs || 0, y.phoneMs || 0),
+      stoopMs: Math.max(x.stoopMs || 0, y.stoopMs || 0),
+      unjudgedMs: Math.max(x.unjudgedMs || 0, y.unjudgedMs || 0),
+      zoneMs: {
+        mild: Math.max(x.zoneMs?.mild || 0, y.zoneMs?.mild || 0),
+        moderate: Math.max(x.zoneMs?.moderate || 0, y.zoneMs?.moderate || 0),
+        severe: Math.max(x.zoneMs?.severe || 0, y.zoneMs?.severe || 0),
+      },
+      ...(x.sample || y.sample ? { sample: true } : {}),
+    };
+  }
+  return out;
+}
+
+function mergeLogs(a, b, keyOf) {
+  const seen = new Set(); const out = [];
+  for (const l of [...(a || []), ...(b || [])]) {
+    const k = keyOf(l);
+    if (seen.has(k)) continue;
+    seen.add(k); out.push(l);
+  }
+  return out.sort((x, y) => (x.iso < y.iso ? -1 : x.iso > y.iso ? 1 : 0));
+}
+
+// Merge a same-account remote snapshot into local state. Returns true if the
+// merged result differs from the remote (i.e. local contributed something and
+// the caller should push the union back up).
+export function mergeRemote(remoteState, ownerId) {
+  const remote = normalize(remoteState);
+  const localNewer = getUpdatedAt() >= (remote.updatedAt || 0);
+  const winner = localNewer ? state : remote;   // scalar settings winner
+  const merged = normalize({ ...remote, ...state,
+    calibBeta: winner.calibBeta,
+    calibrated: state.calibrated || remote.calibrated,
+    notifOn: winner.notifOn,
+    checkin: winner.checkin,
+    lastCheckinISO: winner.lastCheckinISO,
+    sampleData: winner.sampleData,
+    setupDone: state.setupDone || remote.setupDone,
+  });
+  merged.days = mergeDays(state.days, remote.days);
+  merged.flexLogs = mergeLogs(state.flexLogs, remote.flexLogs, (l) => l.iso);
+  merged.exerciseLogs = mergeLogs(state.exerciseLogs, remote.exerciseLogs, (l) => `${l.iso}|${l.id}`);
+  merged.ownerId = ownerId;
+  merged.updatedAt = Math.max(getUpdatedAt(), remote.updatedAt || 0);
+
+  const sansMeta = (s) => JSON.stringify({ ...s, updatedAt: 0, ownerId: null });
+  const changed = sansMeta(merged) !== sansMeta(remote);
+
+  state = merged;
+  writeNow({ stamp: false });
+  for (const fn of hydrateListeners) { try { fn(state); } catch { /* listener error */ } }
+  return changed;
 }
 
 export function getUpdatedAt() { return state.updatedAt || 0; }
@@ -155,7 +272,9 @@ export function seedSampleData() {
   d.setDate(d.getDate() - 20);
   for (let i = 0; i < 21; i++) {
     const key = todayKey(d);
-    if (!state.days[key] || i < 20) {
+    // Only fill days with no real data, and tag what we add so Clear can remove
+    // exactly the sample records without touching genuine history.
+    if (!state.days[key]) {
       const phoneMin = 140 + rand() * 110;                    // 2.3–4h monitored
       const improve = i / 21;                                  // trends better over time
       const stoopPct = 0.55 - improve * 0.22 + (rand() - 0.5) * 0.12;
@@ -165,11 +284,13 @@ export function seedSampleData() {
       state.days[key] = {
         phoneMs: phoneMin * 60000,
         stoopMs: stoopMin * 60000,
+        unjudgedMs: 0,
         zoneMs: {
           mild: stoopMin * (1 - mod - sev) * 60000,
           moderate: stoopMin * mod * 60000,
           severe: stoopMin * sev * 60000,
         },
+        sample: true,
       };
     }
     d.setDate(d.getDate() + 1);
@@ -193,10 +314,8 @@ export function seedSampleData() {
 }
 
 export function clearSampleData() {
-  // sample day records are indistinguishable from real ones, so wipe days
-  // older than today and remove flagged logs
-  const today = todayKey();
-  for (const k of Object.keys(state.days)) if (k !== today) delete state.days[k];
+  // Remove only the records we tagged as sample data — real history is untouched.
+  for (const k of Object.keys(state.days)) if (state.days[k]?.sample) delete state.days[k];
   state.flexLogs = state.flexLogs.filter((l) => !l.sample);
   state.exerciseLogs = state.exerciseLogs.filter((l) => !l.sample);
   state.sampleData = false;
