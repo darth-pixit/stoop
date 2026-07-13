@@ -34,6 +34,7 @@ let _client = null;
 let _clientPromise = null;
 const listeners = new Set();
 let _user = null;
+let signInFlow = false; // true only while we've actually kicked off a sign-in
 
 // Lazily build the Supabase client (loads the vendored SDK on first use only).
 async function client() {
@@ -96,15 +97,28 @@ export async function init() {
   const App = plugin('App');
   if (isNative() && App) {
     App.addListener('appUrlOpen', async ({ url }) => {
-      if (!url || !url.includes('auth/callback')) return;
+      // Only act on our exact callback URL AND only while a sign-in we started
+      // is in flight — otherwise any app firing stoop://…auth/callback could
+      // consume the PKCE verifier and slam the auth browser shut, breaking a
+      // real sign-in (DoS).
+      if (!signInFlow || !url) return;
+      let parsed;
+      try { parsed = new URL(url); } catch { return; }
+      const isCallback =
+        parsed.protocol === `${CONFIG.authScheme}:` &&
+        parsed.host === 'auth' &&
+        (parsed.pathname === '/callback' || parsed.pathname === 'callback');
+      if (!isCallback) return;
+      const code = parsed.searchParams.get('code');
+      if (!code) return;
+      signInFlow = false;
       // Dismiss the browser BEFORE the (network-bound) token exchange.
       // Closing it after an await races the SFSafariViewController dismissal
       // and can leave the WKWebView render-suspended — the app looks frozen
       // while taps still register underneath.
       plugin('Browser')?.close?.().catch?.(() => {});
       try {
-        const code = new URL(url).searchParams.get('code');
-        if (code) await sb.auth.exchangeCodeForSession(code);
+        await sb.auth.exchangeCodeForSession(code);
       } catch (e) {
         console.warn('[auth] callback exchange failed', e);
       }
@@ -126,6 +140,8 @@ async function oauth(provider) {
       options: { redirectTo, skipBrowserRedirect: true },
     });
     if (error) throw error;
+    // Arm the deep-link handler only now that we've started a real sign-in.
+    signInFlow = true;
     // Open the provider page in the system browser; the deep-link listener in
     // init() takes over when it redirects back to stoop://auth/callback.
     const Browser = plugin('Browser');
@@ -154,6 +170,7 @@ export async function signInWithEmail(email) {
     : window.location.href.split('#')[0];
   const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo } });
   if (error) throw error;
+  if (isNative()) signInFlow = true; // the emailed link will deep-link back to us
 }
 
 export async function signOut() {

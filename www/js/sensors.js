@@ -68,8 +68,8 @@ function emit() {
   for (const fn of listeners) fn(reading);
 }
 
-// First real event: retire the simulator if it beat us to it (its interval
-// would otherwise keep overwriting genuine readings forever).
+// A real sensor event arrived — stop any simulation that had kicked in so fake
+// readings can't interleave with (or override) the genuine hardware feed.
 function markLive() {
   if (sensorsSeen && !simulated) return;
   sensorsSeen = true;
@@ -150,14 +150,24 @@ export async function requestPermission() {
 }
 
 // If nothing arrives shortly: gated platforms (iOS) wait for the user to tap
-// the enable button; everything else has no usable sensors — simulate.
+// the enable button; everything else has no usable sensors — simulate. Only
+// conclude "no sensors" while the page is visible: a page loaded (or app-
+// switched away) while hidden gets no orientation events, and simulating then
+// would wrongly latch a real phone into fake readings, so defer the verdict.
 function armFallback() {
   clearTimeout(fallbackTimer);
   fallbackTimer = setTimeout(() => {
     if (!running || sensorsSeen || simulated) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     if (needsPermissionGate() && permission !== 'granted') emitStatus();
     else startSimulation();
   }, 1500);
+}
+
+function onVisibleRecheck() {
+  if (document.visibilityState === 'visible' && running && !sensorsSeen && !simulated) {
+    armFallback();
+  }
 }
 
 export function start() {
@@ -165,6 +175,7 @@ export function start() {
   running = true;
   window.addEventListener('deviceorientation', onOrientation);
   window.addEventListener('devicemotion', onMotion);
+  window.addEventListener('visibilitychange', onVisibleRecheck);
   armFallback();
 }
 
@@ -172,6 +183,7 @@ export function stop() {
   running = false;
   window.removeEventListener('deviceorientation', onOrientation);
   window.removeEventListener('devicemotion', onMotion);
+  window.removeEventListener('visibilitychange', onVisibleRecheck);
   clearTimeout(fallbackTimer);
   stopSimulation();
 }

@@ -15,6 +15,7 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export function runOnboarding(rootEl, onFinish) {
   let step = 0;
   let stopAnim = null;
+  let stepCleanup = null;
   let flexDone = false;
   let lastNav = -1000;
 
@@ -30,6 +31,7 @@ export function runOnboarding(rootEl, onFinish) {
     lastNav = now;
 
     stopAnim?.(); stopAnim = null;
+    stepCleanup?.(); stepCleanup = null;   // tear down a step's widget (sensor/camera listeners)
     step = Math.max(0, Math.min(steps.length - 1, n));
     rootEl.innerHTML = '';
     const wrap = document.createElement('div');
@@ -103,15 +105,22 @@ export function runOnboarding(rootEl, onFinish) {
     const f = foot(wrap, {
       next: '🎛️ Enable motion sensors',
       onNext: async () => {
+        // Request notifications synchronously inside this gesture, before the
+        // awaited motion prompt consumes the tap's user activation (iOS rejects
+        // a notification request made after activation lapses).
+        notify.requestPermission().catch(() => {});
         const ok = await sensors.requestPermission();
         sensors.start();
         if (!ok) toast('No worries — the Now screen has an "Allow motion access" button when you\'re ready');
-        notify.requestPermission().catch(() => {});
         f.querySelector('.btn').remove(); // the widget brings its own capture CTA
-        calibrationWidget(zone, (beta) => {
-          toast(`Calibrated at ${Math.round(beta)}° — that's your happy place 🌤️`);
-          go(3);
-        });
+        stepCleanup = calibrationWidget(
+          zone,
+          (beta) => {
+            toast(`Calibrated at ${Math.round(beta)}° — that's your happy place 🌤️`);
+            go(3);
+          },
+          () => toast('Didn\'t catch a reading — you can calibrate later in Settings'),
+        );
       },
       skip: 'Skip — use the default hold',
     });

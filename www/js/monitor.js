@@ -14,7 +14,7 @@ let smoothed = 0;
 let monitoring = true;
 let lastSampleTs = null;
 let stoopStartedAt = null;     // sustained-stoop timer for notifications
-let lastNotifyAt = 0;
+let lastNotifyAt = -Infinity;  // -Infinity, not 0: page-load must not count as "just notified"
 let unsubscribe = null;
 let unsubStatus = null;
 let rafPending = false;
@@ -76,15 +76,16 @@ export function render(root) {
   if (!monitoring) $('#btn-monitor').textContent = '▶️ Resume watching';
 
   $('#btn-calibrate').addEventListener('click', () => {
+    let cleanup = () => {};
     const sh = sheet(`
       <div class="sheet-head"><h3>🎯 Calibrate</h3><button class="btn ghost small" data-close>Cancel</button></div>
       <div id="cal-zone" style="margin-top:8px"></div>
-    `);
-    calibrationWidget(sh.el.querySelector('#cal-zone'), (beta) => {
-      sh.close();
-      toast(`Calibrated at ${Math.round(beta)}° 🌤️`);
-      $('#btn-calibrate')?.classList.add('hidden');
-    });
+    `, { onClose: () => cleanup() });
+    cleanup = calibrationWidget(
+      sh.el.querySelector('#cal-zone'),
+      (beta) => { sh.close(); toast(`Calibrated at ${Math.round(beta)}° 🌤️`); $('#btn-calibrate')?.classList.add('hidden'); },
+      () => { sh.close(); toast('Didn\'t catch a reading — check motion access and try again'); },
+    );
   });
 
   $('#btn-perm').addEventListener('click', async () => {
@@ -129,7 +130,7 @@ function toggleMonitoring() {
   bedNudgedThisLie = false;
   const btn = $('#btn-monitor');
   if (btn) btn.textContent = monitoring ? '⏸ Pause watching' : '▶️ Resume watching';
-  if (!monitoring) hideLivePill();
+  if (!monitoring) { hideLivePill(); closeNotification(); } // don't leave a stale "you're stooping" notice up
   toast(monitoring ? 'Watching your angle 👀' : 'Paused — enjoy the slouch 😴');
 }
 
@@ -161,7 +162,9 @@ function onReading(r) {
 }
 
 function accumulate(ts, judgable) {
-  if (!monitoring || document.hidden) { lastSampleTs = null; return; }
+  // Never record simulated (desktop demo) readings as real usage — they'd
+  // pollute the day stats and get synced to the account.
+  if (!monitoring || document.hidden || sensors.isSimulated()) { lastSampleTs = null; return; }
   if (lastSampleTs != null) {
     const dt = Math.min(1000, ts - lastSampleTs); // gaps cap at 1s so sleep doesn't inflate
     store.addSample(dt, judgable ? zoneFor(smoothed).id : 'unjudged');

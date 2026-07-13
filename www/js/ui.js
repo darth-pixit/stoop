@@ -1,4 +1,21 @@
 // Tiny UI helpers: toasts and bottom-sheet modals.
+
+// Escape a value for safe interpolation into an innerHTML template. Provider
+// profile fields and any cloud-synced strings are attacker-influenced, so every
+// dynamic string dropped into markup must go through this.
+export function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// Only allow http(s)/data-image URLs into an img src, then escape for the
+// attribute — blocks javascript: and attribute-breakout payloads.
+export function safeImageUrl(url) {
+  const s = String(url || '');
+  return /^https?:\/\//i.test(s) || /^data:image\//i.test(s) ? escapeHtml(s) : '';
+}
+
 export function toast(msg, ms = 2600) {
   const root = document.getElementById('toast-root');
   const t = document.createElement('div');

@@ -11,8 +11,10 @@
 <link rel="apple-touch-icon" href="icons/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- Proxima Nova is licensed; Mulish is the closest open metric match and loads as the live fallback. -->
-<link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<!-- Proxima Nova is licensed; Mulish is the closest open metric match and loads as the live fallback.
+     Loaded non-render-blocking so a slow/offline fonts.googleapis.com never stalls first paint. -->
+<link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600;700;800;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;600;700;800;900&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>

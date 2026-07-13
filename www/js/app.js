@@ -13,7 +13,7 @@ import { CONFIG, isConfigured } from './config.js';
 import { renderLogin } from './login.js';
 import { runOnboarding } from './onboarding.js';
 import { calibrationWidget } from './calibrate.js';
-import { sheet, toast } from './ui.js';
+import { sheet, toast, escapeHtml, safeImageUrl } from './ui.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -64,16 +64,19 @@ function accountSectionHTML() {
   if (!isConfigured()) return '';
   const u = auth.currentUser();
   if (u) {
-    const av = u.avatar
-      ? `<img class="account-av" src="${u.avatar}" alt="">`
+    // Profile fields come from the identity provider's user_metadata (which the
+    // account holder can self-edit) — escape everything before it hits innerHTML.
+    const avUrl = safeImageUrl(u.avatar);
+    const av = avUrl
+      ? `<img class="account-av" src="${avUrl}" alt="">`
       : `<span class="account-av">🙂</span>`;
     return `
       <div class="card" style="margin-top:10px">
         <div class="account-row">
           ${av}
           <div class="account-meta">
-            <b>${u.name || 'Signed in'}</b>
-            <small>${u.email || (u.provider ? `via ${u.provider}` : '')}</small>
+            <b>${escapeHtml(u.name || 'Signed in')}</b>
+            <small>${escapeHtml(u.email || (u.provider ? `via ${u.provider}` : ''))}</small>
             <small id="sync-status"><span class="sync-dot ${sync.getStatus()}"></span>${syncLabel(sync.getStatus())}</small>
           </div>
           <button class="btn ghost small" id="set-signout">Sign out</button>
@@ -142,8 +145,9 @@ function openSettings() {
   el.querySelector('#set-signin')?.addEventListener('click', () => { close(); showLogin(); });
   el.querySelector('#set-signout')?.addEventListener('click', async () => {
     if (!confirm('Sign out of Stoop on this device?')) return;
-    await sync.flush().catch(() => {});
+    await sync.flush().catch(() => {});   // push this account's data up first
     await auth.signOut();
+    store.resetAll();                     // don't leave one user's health data for the next
     location.reload();
   });
 
@@ -165,16 +169,21 @@ function openSettings() {
     toast(e.target.checked ? 'Nudges on 🔔' : 'Nudges off 🔕');
   });
 
-  el.querySelector('#set-recal').addEventListener('click', () => {
+  el.querySelector('#set-recal').addEventListener('click', async () => {
     close();
+    // iOS needs the motion-permission request inside this user gesture, or the
+    // widget only ever sees the simulation fallback (recalibrating against fakes).
+    await sensors.requestPermission().catch(() => {});
+    let cleanup = () => {};
     const sh = sheet(`
       <div class="sheet-head"><h3>📸 Recalibrate</h3><button class="btn ghost small" data-close>Cancel</button></div>
       <div id="recal-zone" style="margin-top:8px"></div>
-    `);
-    calibrationWidget(sh.el.querySelector('#recal-zone'), (beta) => {
-      sh.close();
-      toast(`Recalibrated at ${Math.round(beta)}° 🌤️`);
-    });
+    `, { onClose: () => cleanup() });
+    cleanup = calibrationWidget(
+      sh.el.querySelector('#recal-zone'),
+      (beta) => { sh.close(); toast(`Recalibrated at ${Math.round(beta)}° 🌤️`); },
+      () => { sh.close(); toast('Didn\'t catch a reading — check motion access and try again'); },
+    );
   });
 
   el.querySelector('#set-sample').addEventListener('click', () => {
@@ -282,10 +291,17 @@ async function boot() {
 
   const needLogin = isConfigured() && CONFIG.requireLogin;
   let bootHandled = false;
+  let handledUserId = auth.currentUser()?.id || null;
 
-  // Sign-ins that happen after boot (login screen or settings "Sign in").
+  // Sign-ins that happen after boot (login screen or settings "Sign in"). Guard
+  // on a real user change — Supabase re-emits on every hourly TOKEN_REFRESHED,
+  // and reacting to those would re-render the active view (resetting scroll and
+  // in-view state) roughly once an hour for no reason.
   auth.onAuthChange((user) => {
-    if (!bootHandled || !user) return;
+    if (!bootHandled) return;
+    if ((user?.id || null) === handledUserId) return;
+    handledUserId = user?.id || null;
+    if (!user) return;
     ensureRendererAlive(); // we just came back from the OAuth browser
     $('#login')?.classList.add('hidden');
     if (!entered) {

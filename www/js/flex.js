@@ -142,10 +142,12 @@ const HOLD_SAMPLES = 10;    // …and gather at least this many in-band readings
 export function startTest({ embedded = null, onDone = null } = {}) {
   const results = { right: null, left: null };
   const clean = { right: true, left: true }; // shoulders stayed down?
+  const lockedSign = { right: null, left: null }; // signed roll direction each side locked in
   let side = 'right';
   let phase = 'position';
-  let base = null;         // { roll, shoulderTiltY, shoulderWidth, eyeMidY }
+  let base = null;         // { roll, shoulderTiltY, shoulderWidth, eyeMidY, gap }
   let maxTilt = 0;
+  let bendSign = 0;        // this side's bend direction (+/-1); set on first real bend
   let plateauSince = null;
   let plateauMaxRef = 0;
   let phaseEnteredAt = performance.now();
@@ -248,7 +250,8 @@ export function startTest({ embedded = null, onDone = null } = {}) {
     // live, tell the truth about what we're actually waiting on.
     const camP = pose.openCamera(video).then((s) => {
       stream = s;
-      if (!closed && !pose.isReady()) status('Camera\'s on — loading the pose model (first time only) 📦');
+      if (closed) { pose.stopCamera(s); return; } // teardown already ran — don't leave it live
+      if (!pose.isReady()) status('Camera\'s on — loading the pose model (first time only) 📦');
     });
     const timeout = new Promise((_, rej) => setTimeout(
       () => rej(Object.assign(new Error('pose model load timed out'), { name: 'TimeoutError' })),
@@ -289,9 +292,26 @@ export function startTest({ embedded = null, onDone = null } = {}) {
     el.innerHTML = `<div class="cam-spinner"></div><div>${msg}</div>`;
   }
 
+  // Shoulder-shrug signal. Two ways to cheat range: tilt one shoulder up (the
+  // shoulder LINE tips) OR hoist BOTH shoulders together (the line stays level).
+  // The old code only saw the first. Measure both — the line-tilt delta and the
+  // rise of the shoulder midpoint toward the head (gap to the eye line closing)
+  // — and normalise by the CURRENT frame's shoulder width so leaning toward or
+  // away from the camera can't rescale the threshold.
+  function creepOf(r) {
+    const width = r.shoulderWidth || base.shoulderWidth || 1;
+    const lineTilt = Math.abs(r.shoulderTiltY - base.shoulderTiltY);
+    const gap = (r.shLY + r.shRY) / 2 - r.eyeMidY;
+    const rise = Math.max(0, base.gap - gap);          // both shoulders climbing toward the head
+    return Math.max(lineTilt, rise) / width;
+  }
+
   // ── per-frame loop ────────────────────────────────────────────────
   function loop() {
     if (closed) return;
+    // If our panel was detached (e.g. onboarding advanced past the embedded
+    // test), stop the camera + loop instead of running inference forever.
+    if (!panel.isConnected) { teardown(); return; }
     const ts = Math.max(lastTs + 1, performance.now());
     lastTs = ts;
 
@@ -304,9 +324,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
         ? {
             framed: true,
             roll: rollSmooth.push(r.rollDeg, ts),
-            creep: base
-              ? creepSmooth.push(Math.abs(r.shoulderTiltY - base.shoulderTiltY) / base.shoulderWidth, ts)
-              : 0,
+            creep: base ? creepSmooth.push(creepOf(r), ts) : 0,
             read: r,
           }
         : { framed: false };
@@ -323,15 +341,16 @@ export function startTest({ embedded = null, onDone = null } = {}) {
 
     if (!sample.framed) {
       if (phase === 'position') nudge('Line your head and both shoulders up in the frame 🪞', 'warn');
-      else nudge('I lost you — get back in frame 🪞', 'warn');
+      // Don't clobber the locked result message when framing briefly drops.
+      else if (phase !== 'locked') nudge('I lost you — get back in frame 🪞', 'warn');
       return;
     }
 
     buf.push({ t: now, roll: sample.roll });
     while (buf.length && now - buf[0].t > 1000) buf.shift();
 
-    const eff = base ? Math.abs(sample.roll - base.roll) : 0;
-    const shown = Math.round(phase === 'locked' ? results[side] : eff);
+    const dev = base ? sample.roll - base.roll : 0; // signed head-tilt vs upright baseline
+    const shown = Math.round(phase === 'locked' ? results[side] : Math.abs(dev));
     const angleEl = q('#fx-angle');
     if (angleEl.textContent !== String(shown)) angleEl.textContent = shown;
 
@@ -339,7 +358,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
 
     if (phase === 'position') stepPosition(sample, now);
     else if (phase === 'baseline') stepBaseline(sample, now);
-    else if (phase === 'tilt') stepTilt(eff, sample, now);
+    else if (phase === 'tilt') stepTilt(dev, sample, now);
   }
 
   function stability() {
@@ -387,20 +406,36 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   function stepBaseline(sample, now) {
     if (stability() > 3 || rate() > 5) { setPhase('position'); return; }
     if (now - phaseEnteredAt < 1000) return;
+    const rd = sample.read;
     base = {
       roll: buf.reduce((a, b) => a + b.roll, 0) / buf.length,
-      shoulderTiltY: sample.read ? sample.read.shoulderTiltY : 0,
-      shoulderWidth: sample.read ? sample.read.shoulderWidth : 1,
-      eyeMidY: sample.read ? sample.read.eyeMidY : 0.4,
+      shoulderTiltY: rd ? rd.shoulderTiltY : 0,
+      shoulderWidth: rd ? rd.shoulderWidth : 1,
+      eyeMidY: rd ? rd.eyeMidY : 0.4,
+      gap: rd ? ((rd.shLY + rd.shRY) / 2 - rd.eyeMidY) : 0, // shoulder-to-eyeline gap at rest
     };
     creepSmooth.reset(); // creep is measured against the base we just took
     maxTilt = 0;
+    bendSign = 0;        // learn this side's tilt direction fresh from the baseline
     clean[side] = true;
     setPhase('tilt');
     nudge(`Now tip your <b>${side} ear</b> toward your shoulder — slow as honey 🍯. Keep that shoulder <b>heavy</b>!`);
   }
 
-  function stepTilt(eff, sample, now) {
+  function stepTilt(dev, sample, now) {
+    // Learn the bend direction from the first real bend, then only credit tilt
+    // in THAT direction — a wrong-way tilt (or measuring the same physical side
+    // twice) earns nothing, so results.left can't secretly record a right bend.
+    if (!simMode && bendSign === 0 && Math.abs(dev) > REAL_BEND) bendSign = Math.sign(dev);
+    if (!simMode && bendSign !== 0 && Math.sign(dev) === -bendSign && Math.abs(dev) > REAL_BEND) {
+      nudge(`Other way — tip your <b>${side} ear</b> toward <b>that</b> shoulder 🪞`, 'warn');
+      plateauSince = null;
+      return;
+    }
+    const eff = simMode || bendSign === 0
+      ? Math.abs(dev)
+      : (Math.sign(dev) === bendSign ? Math.abs(dev) : 0);
+
     const creeping = sample.creep > CREEP_GATE;
     // Only credit range earned with the shoulder down — a shrug earns nothing.
     if (!creeping && eff > maxTilt) maxTilt = eff;
@@ -446,6 +481,16 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   }
 
   function lockSide() {
+    // The two sides must bend in opposite directions. If this side went the same
+    // way as the already-locked side, it's the same physical bend twice — reject
+    // and coach, rather than logging it as the opposite side's range.
+    const other = side === 'right' ? 'left' : 'right';
+    if (!simMode && lockedSign[other] != null && bendSign !== 0 && bendSign === lockedSign[other]) {
+      nudge('That\'s the <b>same side</b> as before — sit tall and tip your <b>other</b> ear down 🪞', 'warn');
+      maxTilt = 0; plateauSince = null; holdBuf.length = 0; bendSign = 0;
+      return;
+    }
+    lockedSign[side] = bendSign;
     results[side] = Math.round(holdBuf.reduce((a, v) => a + v, 0) / holdBuf.length);
     setPhase('locked');
     q('#fx-angle').textContent = results[side];
@@ -456,6 +501,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
       actions.querySelector('#fx-next').addEventListener('click', () => {
         side = 'left';
         maxTilt = 0;
+        bendSign = 0;                 // relearn direction for the left side
         base = simMode ? base : null; // recapture an upright baseline for the new side
         buf.length = 0;
         holdBuf.length = 0;
