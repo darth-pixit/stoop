@@ -21,9 +21,9 @@ test('output is clamped to a sane 0–90 range', () => {
   assert.equal(neckAngleFrom(-40, 95), 90);
 });
 
-test('lying down / overhead poses are not judged', () => {
-  assert.equal(neckAngleFrom(130, 75), 0);  // lying on back
-  assert.equal(neckAngleFrom(-50, 75), 0);  // phone overhead
+test('lying down / overhead poses are unjudgable — null, never a fake angle', () => {
+  assert.equal(neckAngleFrom(130, 75), null);  // lying on back
+  assert.equal(neckAngleFrom(-50, 75), null);  // phone overhead
 });
 
 test('missing sensor data returns null, not a fake angle', () => {

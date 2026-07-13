@@ -15,7 +15,7 @@ That runs two gates:
 - `npm run check` — esbuild bundles `www/js/app.js`, catching syntax errors
   and broken imports across every module (the app is buildless, so nothing
   else validates this before runtime).
-- `node --test tests/` — unit regression tests for the pure logic:
+- `node --test test/` — unit regression tests for the pure logic:
   - `strain.test.mjs` — Hansraj strain curve anchors, zone boundaries,
     kg equivalents.
   - `sensors.test.mjs` — phone-pitch → neck-angle mapping (calibration math,
@@ -24,6 +24,9 @@ That runs two gates:
     first bend test**, day aggregates, sample-data seeding/clearing.
   - `smoother.test.mjs` — bend-test filter: steady on hold, spike-immune,
     low-lag on real movement.
+  - `context.test.mjs` / `latch.test.mjs` / `neck.test.mjs` — the context
+    classifier (lying down / sideways / parked flat / moving), hysteresis
+    latch, and neck-angle guard bands.
 
 ## Manual — desktop browser (~5 min)
 

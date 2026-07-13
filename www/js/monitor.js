@@ -3,7 +3,8 @@
 import * as sensors from './sensors.js';
 import * as store from './store.js';
 import * as notify from './notify.js';
-import { strainKg, zoneFor, equivalentFor, STOOP_THRESHOLD } from './strain.js';
+import { strainKg, zoneFor, equivalentFor, STOOP_ENTER, STOOP_EXIT } from './strain.js';
+import { CONTEXTS, createContextTracker, createLatch } from './context.js';
 import { createSideFigure } from './figure.js';
 import { calibrationWidget } from './calibrate.js';
 import { sheet, toast } from './ui.js';
@@ -17,8 +18,16 @@ let lastNotifyAt = 0;
 let unsubscribe = null;
 let rafPending = false;
 let notifGranted = false;      // cached; refreshed on render + after permission asks
-let resting = false;           // phone motionless → it's on a table, not a neck
-const restBuf = [];            // rolling {t, beta} to detect the motionless phone
+
+// Context gate: is this sample judgable posture at all, or is the user lying
+// down / on the move / phone parked flat? Unjudgable time is logged separately
+// and never credited as upright.
+const tracker = createContextTracker();
+const stoopLatch = createLatch(STOOP_ENTER, STOOP_EXIT);
+let currentCtx = CONTEXTS.judgable;
+let wasJudgable = true;
+let overheadStartedAt = null;  // sustained lying-back timer for the bed nudge
+let bedNudgedThisLie = false;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -87,50 +96,35 @@ function toggleMonitoring() {
   monitoring = !monitoring;
   lastSampleTs = null;
   stoopStartedAt = null;
+  stoopLatch.reset();
+  overheadStartedAt = null;
+  bedNudgedThisLie = false;
   const btn = $('#btn-monitor');
   if (btn) btn.textContent = monitoring ? '⏸ Pause watching' : '▶️ Resume watching';
   if (!monitoring) hideLivePill();
   toast(monitoring ? 'Watching your angle 👀' : 'Paused — enjoy the slouch 😴');
 }
 
-// A phone that is essentially motionless for a few seconds is lying on a
-// table or stand — not being held over a neck. Hands always jitter a little,
-// so near-zero pitch variance is a reliable "at rest" signal. (Never true in
-// sim mode: the simulator emits perfectly constant values by design.)
-const REST_WINDOW_MS = 8000;
-const REST_MIN_SPAN_MS = 5000;
-const REST_MAX_WOBBLE = 0.8; // ° of beta range that still counts as "still"
-
-function updateResting(r) {
-  if (r.simulated || r.beta == null) { resting = false; restBuf.length = 0; return; }
-  restBuf.push({ t: r.ts, b: r.beta });
-  while (restBuf.length && r.ts - restBuf[0].t > REST_WINDOW_MS) restBuf.shift();
-  if (r.ts - restBuf[0].t < REST_MIN_SPAN_MS) { resting = false; return; }
-  let min = Infinity, max = -Infinity;
-  for (const s of restBuf) { if (s.b < min) min = s.b; if (s.b > max) max = s.b; }
-  resting = max - min < REST_MAX_WOBBLE;
-}
-
 function onReading(r) {
   const settings = store.get();
-  updateResting(r);
-  if (resting) {
-    stoopStartedAt = null;
-    lastSampleTs = null;
-    closeNotification();
-    hideLivePill();
-    if (!rafPending) {
-      rafPending = true;
-      requestAnimationFrame(() => { rafPending = false; paintResting(); });
-    }
-    return;
-  }
+  // The simulator emits constant, jitter-free readings that would classify as
+  // "resting flat" — bypass the tracker so the sim slider keeps working.
+  const ctx = r.simulated ? CONTEXTS.judgable : tracker.update(r, r.ts);
   const neck = sensors.neckAngleFrom(r.beta, settings.calibBeta);
-  if (neck == null) return;
-  smoothed += (neck - smoothed) * 0.18;
+  const judgable = ctx.judgable && neck != null;
+  // If the pitch guard band vetoes a nominally-judgable context, the phone is
+  // tipped overhead/back — report that rather than a stale judged angle.
+  currentCtx = judgable ? CONTEXTS.judgable : (ctx.judgable ? CONTEXTS.overhead : ctx);
 
-  accumulate(r.ts);
-  maybeNotify(r.ts);
+  if (judgable) {
+    if (!wasJudgable) smoothed = neck; // snap past EMA lag when judging resumes
+    else smoothed += (neck - smoothed) * 0.18;
+  }
+  wasJudgable = judgable;
+
+  accumulate(r.ts, judgable);
+  maybeNotify(r.ts, judgable);
+  maybeBedNudge(r.ts, ctx);
 
   if (!rafPending) {
     rafPending = true;
@@ -138,34 +132,39 @@ function onReading(r) {
   }
 }
 
-function paintResting() {
-  const num = $('#angle-num');
-  if (!num) return;
-  num.textContent = '–';
-  const tag = $('#zone-tag');
-  tag.textContent = '😴 Phone at rest';
-  tag.style.background = 'var(--lilac-soft)';
-  tag.style.color = 'var(--lilac)';
-  $('#strain-line').innerHTML = 'Pick your phone up and I\'ll read your angle.';
-  figure?.set({ angle: 0, zone: 'upright', kg: null });
-}
-
-function accumulate(ts) {
+function accumulate(ts, judgable) {
   if (!monitoring || document.hidden) { lastSampleTs = null; return; }
   if (lastSampleTs != null) {
     const dt = Math.min(1000, ts - lastSampleTs); // gaps cap at 1s so sleep doesn't inflate
-    store.addSample(dt, zoneFor(smoothed).id);
+    store.addSample(dt, judgable ? zoneFor(smoothed).id : 'unjudged');
   }
   lastSampleTs = ts;
 }
 
 function paint() {
+  const num = $('#angle-num');
+  if (!num) return; // view swapped out
+
+  if (!currentCtx.judgable) {
+    // Lying back / on the move / phone parked: be honest that we're not judging
+    // rather than pretending this is upright time.
+    num.textContent = '–';
+    const tag = $('#zone-tag');
+    tag.textContent = `${currentCtx.emoji} ${currentCtx.label}`;
+    tag.style.background = 'var(--card-soft)';
+    tag.style.color = 'var(--ink-2)';
+    $('#strain-line').innerHTML = 'Not judging posture right now — carry on.';
+    document.querySelector('.stage-card .halo')?.style.setProperty('--halo', 'var(--card-soft)');
+    figure?.set({ angle: 0, zone: 'upright', kg: strainKg(0) });
+    updateMiniStats();
+    hideLivePill();
+    return;
+  }
+
   const angle = Math.round(smoothed);
   const zone = zoneFor(smoothed);
   const kg = strainKg(smoothed);
 
-  const num = $('#angle-num');
-  if (!num) return; // view swapped out
   num.textContent = angle;
 
   const tag = $('#zone-tag');
@@ -212,9 +211,12 @@ function meterFor(angle) {
   return '▮'.repeat(filled) + '▯'.repeat(6 - filled);
 }
 
-function maybeNotify(ts) {
+function maybeNotify(ts, judgable) {
   if (!monitoring) return;
-  const stooping = smoothed >= STOOP_THRESHOLD;
+  if (!judgable) { stoopLatch.reset(); stoopStartedAt = null; closeNotification(); hideLivePill(); return; }
+  // Hysteresis: latch on at STOOP_ENTER, release only at STOOP_EXIT — a one-
+  // sample dip below the threshold no longer resets the sustain timer.
+  const stooping = stoopLatch.update(smoothed);
   if (!stooping) { stoopStartedAt = null; closeNotification(); hideLivePill(); return; }
   if (stoopStartedAt == null) stoopStartedAt = ts;
   if (ts - stoopStartedAt < SUSTAIN_MS) return;
@@ -240,11 +242,34 @@ function closeNotification() {
   notify.closeLive();
 }
 
+// One gentle heads-up per lying-down session once scrolling on your back has
+// gone on a while. Neck-neutral, so it's soft — and never repeated until the
+// user actually gets up (context leaves `overhead`).
+const BED_SUSTAIN_MS = 10 * 60000;
+
+function maybeBedNudge(ts, ctx) {
+  if (ctx.id !== 'overhead' || !monitoring) {
+    overheadStartedAt = null;
+    bedNudgedThisLie = false;
+    return;
+  }
+  if (overheadStartedAt == null) overheadStartedAt = ts;
+  if (bedNudgedThisLie || ts - overheadStartedAt < BED_SUSTAIN_MS) return;
+
+  const settings = store.get();
+  if (!settings.notifOn || !notifGranted) return;
+  bedNudgedThisLie = true;
+  notify.showBed(
+    '🛏️ Been scrolling on your back for a while',
+    'Your neck is fine down there — just so you know Stoop isn\'t counting this as good posture 😴',
+  );
+}
+
 function updateLivePill(zone, angle, kg) {
   const pill = document.getElementById('live-pill');
   const onNowTab = !document.getElementById('view-now').classList.contains('hidden');
   const stoopingLong = stoopStartedAt != null && performance.now() - stoopStartedAt > SUSTAIN_MS;
-  if (!monitoring || onNowTab || !stoopingLong || angle < STOOP_THRESHOLD) { hideLivePill(); return; }
+  if (!monitoring || onNowTab || !stoopingLong || !stoopLatch.get()) { hideLivePill(); return; }
   pill.innerHTML = `<span class="pulse"></span> ${zone.emoji} ${angle}° · ${kg.toFixed(0)} kg on your neck`;
   pill.classList.remove('hidden');
 }

@@ -7,7 +7,7 @@
   "scripts": {
     "serve": "python3 -m http.server 8000 --directory www",
     "check": "esbuild www/js/app.js --bundle --outfile=/dev/null --log-level=warning",
-    "test": "npm run check && node --test tests/*.test.mjs",
+    "test": "npm run check && node --test test/*.test.mjs",
     "vendor:supabase": "node scripts/vendor-supabase.mjs",
     "sync": "cap sync",
     "copy": "cap copy",

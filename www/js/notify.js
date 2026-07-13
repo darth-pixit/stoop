@@ -18,6 +18,7 @@ function nativePlugin() {
 }
 
 const LIVE_ID = 4242; // one stable id → each nudge replaces the previous one
+const BED_ID = 4243;  // the once-per-lie "scrolling on your back" heads-up
 
 export function supported() {
   return isNative() ? Boolean(nativePlugin()) : 'Notification' in window;
@@ -56,23 +57,30 @@ export async function requestPermission() {
 
 let webNotif = null;
 
-// Show/refresh the single live stoop nudge. Silent by design.
-export async function showLive(title, body) {
+// Show/refresh a silent nudge. Same id replaces the previous notification.
+async function show(id, tag, title, body, remember = false) {
   try {
     if (isNative()) {
       const p = nativePlugin();
       if (!p) return;
-      await p.schedule({ notifications: [{ id: LIVE_ID, title, body, sound: null }] });
+      await p.schedule({ notifications: [{ id, title, body, sound: null }] });
       return;
     }
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    webNotif = new Notification(title, {
-      tag: 'stoop-live', renotify: false, silent: true, body,
+    const n = new Notification(title, {
+      tag, renotify: false, silent: true, body,
       icon: 'icons/icon.svg', badge: 'icons/icon.svg',
     });
-    webNotif.onclick = () => window.focus();
+    n.onclick = () => window.focus();
+    if (remember) webNotif = n;
   } catch { /* some platforms only allow notifications from a service worker */ }
 }
+
+// The live stoop readout nudge (refreshed while the slump continues).
+export const showLive = (title, body) => show(LIVE_ID, 'stoop-live', title, body, true);
+
+// One gentle lying-down heads-up per session.
+export const showBed = (title, body) => show(BED_ID, 'stoop-bed', title, body);
 
 export async function closeLive() {
   try {

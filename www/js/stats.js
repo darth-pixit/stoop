@@ -99,9 +99,13 @@ function renderToday() {
   }
   $('#st-delta').innerHTML = badge;
 
-  $('#st-context').textContent = pct != null
+  let context = pct != null
     ? `That's ${Math.round(pct * 100)}% of the ${store.fmtDur(today.phoneMs)} you've been on your phone with Stoop watching.`
     : 'Keep Stoop open while you use your phone and today\'s picture will fill in.';
+  if ((today.unjudgedMs || 0) > 5 * 60000) {
+    context += ` Stoop skipped judging for ${store.fmtDur(today.unjudgedMs)} (lying down, moving, or phone resting flat).`;
+  }
+  $('#st-context').textContent = context;
 }
 
 // ── trend ───────────────────────────────────────────────────────
