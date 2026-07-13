@@ -195,6 +195,8 @@ button { font-family: inherit; color: inherit; }
 }
 .sim-strip label { font-weight: 800; color: var(--lilac); display: block; margin-bottom: 6px; }
 .sim-strip input[type=range] { width: 100%; accent-color: var(--lilac); }
+.sim-strip .btn { width: 100%; }
+.perm-help { margin: 8px 0 0; color: var(--ink-2); line-height: 1.45; }
 
 .mini-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 .mini-stat {

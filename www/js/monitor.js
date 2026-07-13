@@ -16,6 +16,7 @@ let lastSampleTs = null;
 let stoopStartedAt = null;     // sustained-stoop timer for notifications
 let lastNotifyAt = 0;
 let unsubscribe = null;
+let unsubStatus = null;
 let rafPending = false;
 let notifGranted = false;      // cached; refreshed on render + after permission asks
 
@@ -51,6 +52,11 @@ export function render(root) {
         <label>🖥️ No motion sensors here — drag to preview the slump</label>
         <input type="range" id="sim-range" min="0" max="70" value="0" step="1" aria-label="Simulated neck angle">
       </div>
+      <div class="sim-strip hidden" id="perm-strip">
+        <label>📵 iOS keeps motion sensors off until you allow them</label>
+        <button class="btn primary" id="btn-perm">🎛️ Allow motion access</button>
+        <p class="perm-help hidden" id="perm-help">No prompt? iOS remembers an earlier "Don't Allow" for the rest of the session — fully close Stoop, reopen it, and tap again.</p>
+      </div>
     </div>
 
     <p class="eyebrow">Today so far</p>
@@ -81,15 +87,37 @@ export function render(root) {
     });
   });
 
+  $('#btn-perm').addEventListener('click', async () => {
+    const ok = await sensors.requestPermission();
+    if (ok) toast('Motion access on — watching your angle 👀');
+    else $('#perm-help')?.classList.remove('hidden');
+  });
+
   if (!unsubscribe) unsubscribe = sensors.subscribe(onReading);
+  if (!unsubStatus) unsubStatus = sensors.onStatus(applySensorStatus);
   sensors.start();
   notify.granted().then((v) => { notifGranted = v; });
-  setTimeout(() => {
-    if (sensors.isSimulated()) $('#sim-strip')?.classList.remove('hidden');
-    else if (!store.get().calibrated) $('#btn-calibrate')?.classList.remove('hidden');
-  }, 1700);
+  applySensorStatus(sensors.getStatus());
 
   updateMiniStats();
+}
+
+// Show the affordance matching how readings (don't) arrive: the sim slider on
+// sensor-less desktops, the iOS permission button while the gate is closed,
+// the calibrate nudge once real data flows.
+function applySensorStatus(status) {
+  const sim = $('#sim-strip');
+  if (!sim) return; // view swapped out
+  sim.classList.toggle('hidden', status !== 'simulated');
+  $('#perm-strip').classList.toggle('hidden', status !== 'blocked');
+  if (status === 'blocked') {
+    const tag = $('#zone-tag');
+    tag.textContent = '📵 motion access needed';
+    tag.style.background = 'var(--card-soft)';
+    tag.style.color = 'var(--ink-2)';
+    $('#strain-line').innerHTML = 'Tap the button below — iOS will ask you to confirm.';
+  }
+  if (status === 'live' && !store.get().calibrated) $('#btn-calibrate')?.classList.remove('hidden');
 }
 
 function toggleMonitoring() {

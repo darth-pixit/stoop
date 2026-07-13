@@ -105,7 +105,7 @@ export function runOnboarding(rootEl, onFinish) {
       onNext: async () => {
         const ok = await sensors.requestPermission();
         sensors.start();
-        if (!ok) toast('No worries — you can grant it later in Settings');
+        if (!ok) toast('No worries — the Now screen has an "Allow motion access" button when you\'re ready');
         notify.requestPermission().catch(() => {});
         f.querySelector('.btn').remove(); // the widget brings its own capture CTA
         calibrationWidget(zone, (beta) => {
