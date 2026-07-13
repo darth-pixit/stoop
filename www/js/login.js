@@ -39,6 +39,10 @@ export function renderLogin(rootEl, { onSkip } = {}) {
   rootEl.appendChild(wrap);
 
   let busy = false;
+  const resetButtons = () => {
+    busy = false;
+    wrap.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+  };
   const run = async (fn, label) => {
     if (busy) return;
     busy = true;
@@ -49,11 +53,20 @@ export function renderLogin(rootEl, { onSkip } = {}) {
       // Web: a redirect is now under way. Native: the system browser is open and
       // the deep-link callback will complete sign-in — leave buttons disabled.
     } catch (e) {
-      busy = false;
-      wrap.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      resetButtons();
       toast(`Couldn't start ${label} sign-in. ${e?.message || ''}`.trim());
     }
   };
+
+  // Recover from a cancelled sign-in so the screen never stays permanently dead:
+  //  • native — returning from the system browser without authenticating fires
+  //    visibilitychange (no deep-link callback ever arrives);
+  //  • web — hitting Back from the provider restores this page from bfcache.
+  // A successful sign-in hides #login before these run, so re-enabling is a no-op.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !rootEl.classList.contains('hidden')) resetButtons();
+  });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) resetButtons(); });
 
   wrap.querySelectorAll('.sso-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -67,7 +80,9 @@ export function renderLogin(rootEl, { onSkip } = {}) {
     e.preventDefault();
     const email = e.target.querySelector('input').value.trim();
     if (!email || !email.includes('@')) { toast('Enter a valid email'); return; }
-    run(() => signInWithEmail(email).then(() => toast('Check your inbox for the link ✉️')), 'email');
+    // OTP doesn't redirect on web — re-enable the form so the user can correct a
+    // typo'd address or switch to a provider instead of being locked out.
+    run(() => signInWithEmail(email).then(() => { toast('Check your inbox for the link ✉️'); resetButtons(); }), 'email');
   });
 
   wrap.querySelector('.login-skip')?.addEventListener('click', () => onSkip?.());

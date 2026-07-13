@@ -10,8 +10,11 @@ function median(values) {
   return s[Math.floor(s.length / 2)];
 }
 
-// Renders into `container`; calls onDone(calibBeta) after capture.
-export function calibrationWidget(container, onDone) {
+// Renders into `container`; calls onDone(calibBeta) after a successful capture,
+// or onFail() if the capture window collected no readings (e.g. permission
+// denied). Returns a cleanup() the caller MUST invoke on dismissal — it cancels
+// a pending capture and removes the sensor listeners.
+export function calibrationWidget(container, onDone, onFail) {
   container.innerHTML = `
     <div class="ob-check-row"><span class="emo">🪑</span><span>Sit or stand tall — ears stacked over shoulders.</span></div>
     <div class="ob-check-row"><span class="emo">📱</span><span>Raise the phone until it's comfortably near eye level. That's your "good" hold.</span></div>
@@ -22,17 +25,29 @@ export function calibrationWidget(container, onDone) {
   const btn = container.querySelector('[data-cal-btn]');
 
   sensors.start();
+  let done = false;
+  let captureTimer = null;
+  let collect = null;
   const unsub = sensors.subscribe((r) => {
     if (r.beta != null && live.isConnected) live.textContent = Math.round(r.beta);
   });
 
+  function cleanup() {
+    if (done) return;
+    done = true;
+    clearTimeout(captureTimer);
+    collect?.();
+    unsub();
+  }
+
   btn.addEventListener('click', () => {
+    if (done || captureTimer) return;
     btn.disabled = true;
     btn.textContent = 'Hold it… 📸';
     const samples = [];
     const tilts = [];   // screenTilt per sample, for the lying/flat sanity gate
     const sides = [];   // |sideTilt| per sample
-    const collect = sensors.subscribe((r) => {
+    collect = sensors.subscribe((r) => {
       if (r.beta == null) return;
       samples.push(r.beta);
       const up = upFromOrientation(r.beta, r.gamma);
@@ -42,8 +57,9 @@ export function calibrationWidget(container, onDone) {
         sides.push(Math.abs(p.sideTilt));
       }
     });
-    setTimeout(() => {
-      collect();
+    captureTimer = setTimeout(() => {
+      captureTimer = null;
+      collect?.(); collect = null;
 
       // You can't capture "good posture" lying on your back, with the phone
       // nearly flat, or on its side — that baseline would poison every later
@@ -65,11 +81,20 @@ export function calibrationWidget(container, onDone) {
         hint.textContent = 'Sit or stand upright and hold the phone near eye level, then try again 🙂';
         return; // keep the live readout running for another attempt
       }
-      unsub();
 
-      const avg = samples.length
-        ? samples.reduce((a, v) => a + v, 0) / samples.length
-        : store.get().calibBeta;
+      if (!samples.length) {
+        // No readings landed — report failure instead of silently "succeeding"
+        // at the existing default hold.
+        btn.disabled = false;
+        btn.textContent = '📸 Capture my good posture';
+        done = true;
+        unsub();
+        onFail?.();
+        return;
+      }
+      done = true;
+      unsub();
+      const avg = samples.reduce((a, v) => a + v, 0) / samples.length;
       // clamp to a sane hold — nobody's "good posture" is a phone flat on a table
       const calibBeta = Math.min(95, Math.max(45, avg));
       store.set({ calibBeta, calibrated: true });
@@ -77,5 +102,5 @@ export function calibrationWidget(container, onDone) {
     }, 1300);
   });
 
-  return () => unsub();
+  return cleanup;
 }

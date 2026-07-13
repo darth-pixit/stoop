@@ -38,9 +38,20 @@ function emit() {
   for (const fn of listeners) fn(reading);
 }
 
+// A real sensor event arrived — stop any simulation that had kicked in so fake
+// readings can't interleave with (or override) the genuine hardware feed.
+function markReal() {
+  sensorsSeen = true;
+  if (simulated) {
+    simulated = false;
+    clearInterval(simTimer);
+    simTimer = null;
+  }
+}
+
 function onOrientation(e) {
   if (e.beta == null) return;
-  sensorsSeen = true;
+  markReal();
   reading.beta = e.beta;
   reading.gamma = e.gamma;
   emit();
@@ -49,7 +60,7 @@ function onOrientation(e) {
 function onMotion(e) {
   const g = e.accelerationIncludingGravity;
   if (!g || g.x == null) return;
-  sensorsSeen = true;
+  markReal();
   const mag = Math.hypot(g.x, g.y, g.z) || 9.81;
   // Angle between the phone's long (y) axis and gravity. Held upright against
   // the ear this reads ~0°; ear-to-shoulder head tilt grows it directly.
@@ -98,22 +109,39 @@ export async function requestPermission() {
   }
 }
 
+// If nothing arrives shortly, this hardware has no usable sensors — but only
+// conclude that while the page is visible. A page loaded (or app-switched away)
+// while hidden gets no orientation events; starting the simulation then would
+// wrongly latch a real phone into fake readings, so defer until it's visible.
+function maybeStartSimulation() {
+  if (sensorsSeen || !running || simulated) return;
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  startSimulation();
+}
+
+function onVisibleRecheck() {
+  if (document.visibilityState === 'visible' && running && !sensorsSeen && !simulated) {
+    setTimeout(maybeStartSimulation, 1500);
+  }
+}
+
 export function start() {
   if (running) return;
   running = true;
   window.addEventListener('deviceorientation', onOrientation);
   window.addEventListener('devicemotion', onMotion);
-  // If nothing arrives shortly, this hardware has no usable sensors.
-  setTimeout(() => {
-    if (!sensorsSeen && running) startSimulation();
-  }, 1500);
+  window.addEventListener('visibilitychange', onVisibleRecheck);
+  setTimeout(maybeStartSimulation, 1500);
 }
 
 export function stop() {
   running = false;
   window.removeEventListener('deviceorientation', onOrientation);
   window.removeEventListener('devicemotion', onMotion);
+  window.removeEventListener('visibilitychange', onVisibleRecheck);
   clearInterval(simTimer);
+  simTimer = null;
+  simulated = false;
 }
 
 // Phone pitch → estimated neck flexion, personalised by calibration.

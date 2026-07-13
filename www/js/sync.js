@@ -12,6 +12,7 @@ const TABLE = 'user_state';
 const PUSH_DEBOUNCE_MS = 4000;
 
 let activeUserId = null;
+let syncReady = false;     // true only after a successful initial pull for activeUserId
 let pushTimer = null;
 let pendingPush = false;
 let status = 'idle'; // idle | syncing | synced | offline | error
@@ -67,45 +68,63 @@ async function push(sb, uid) {
 }
 
 // Decide, on sign-in, whether the cloud copy or the local copy wins — and never
-// leak one account's local data into another account's fresh cloud row.
+// leak one account's local data into another account's row. Pushes stay blocked
+// (syncReady=false) until this completes successfully, so a failed/slow pull can
+// never let local state overwrite the cloud row before it's been reconciled.
 async function reconcile(userId) {
-  const sb = await supabase();
-  if (!sb) return;
   setStatus('syncing');
+  let sb;
   try {
+    sb = await supabase();
+    if (!sb) { setStatus('offline'); return; }
     const remote = await fetchRemote(sb, userId);
-    if (remote === undefined) { setStatus('offline'); return; } // network error; try later
+    if (remote === undefined) {            // network error — DON'T push over the cloud row
+      setStatus('offline');
+      scheduleReconcileRetry(userId);
+      return;
+    }
 
     const localOwner = store.getOwner();
+    const foreignLocal = localOwner != null && localOwner !== userId;
 
-    if (remote) {
-      const sameUserLocalIsNewer =
-        localOwner === userId && store.getUpdatedAt() > remote.updatedAt;
-      if (sameUserLocalIsNewer) {
-        await push(sb, userId);            // this user edited offline more recently
-      } else {
-        store.hydrate({ ...remote.state, ownerId: userId });
-      }
-    } else if (localOwner == null || localOwner === userId) {
-      store.setOwner(userId);              // claim guest/local data as this user's first sync
-      await push(sb, userId);
+    if (foreignLocal) {
+      // This device holds a *different* account's data. Never upload it as this
+      // user; take the remote (or a clean slate if the row is empty) instead.
+      store.hydrate({ ...(remote ? remote.state : {}), ownerId: userId });
+      syncReady = true;
+      if (!remote) await push(sb, userId);
+    } else if (remote) {
+      // Same account (or guest adopting) → merge so neither device loses data.
+      const changed = store.mergeRemote(remote.state, userId);
+      syncReady = true;
+      if (changed) await push(sb, userId);
     } else {
-      store.hydrate({ ownerId: userId });  // a different account used this device — start clean
+      store.setOwner(userId);              // claim guest/local data as this user's first sync
+      syncReady = true;
       await push(sb, userId);
     }
     setStatus('synced');
   } catch (e) {
     console.warn('[sync] reconcile failed', e?.message || e);
     setStatus('error');
+    scheduleReconcileRetry(userId);
   } finally {
     markFirstSync();
   }
 }
 
+let reconcileRetry = null;
+function scheduleReconcileRetry(userId) {
+  clearTimeout(reconcileRetry);
+  reconcileRetry = setTimeout(() => {
+    if (activeUserId === userId && !syncReady) reconcile(userId);
+  }, 15000);
+}
+
 async function runPush() {
   clearTimeout(pushTimer);
   pushTimer = null;
-  if (!activeUserId) return;
+  if (!activeUserId || !syncReady) return; // never push before the initial pull reconciled
   const sb = await supabase();
   if (!sb) return;
   pendingPush = false;
@@ -121,7 +140,7 @@ async function runPush() {
 }
 
 function schedulePush() {
-  if (!activeUserId) return;
+  if (!activeUserId || !syncReady) return; // hold local edits until reconcile succeeds
   pendingPush = true;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(runPush, PUSH_DEBOUNCE_MS);
@@ -137,10 +156,13 @@ export function init() {
 
   onAuthChange((user) => {
     if (user?.id) {
+      if (user.id === activeUserId) return; // same user (token refresh / boot re-emit): ignore
       activeUserId = user.id;
+      syncReady = false;
       reconcile(user.id);
     } else {
       activeUserId = null;
+      syncReady = false;
       clearTimeout(pushTimer);
       pushTimer = null;
       setStatus('idle');
@@ -150,7 +172,10 @@ export function init() {
   store.onChange(() => schedulePush());
 
   // Flush queued changes when we come back online or the app is hidden/closed.
-  window.addEventListener('online', () => { if (pendingPush) runPush(); });
+  window.addEventListener('online', () => {
+    if (activeUserId && !syncReady) reconcile(activeUserId); // retry a failed initial pull
+    else if (pendingPush) runPush();
+  });
   document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
   window.addEventListener('pagehide', () => { flush(); });
 }

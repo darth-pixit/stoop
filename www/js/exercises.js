@@ -1,7 +1,7 @@
 // Moves view: curated animated exercises with a guided start/log flow.
 import * as store from './store.js';
 import { createSideFigure, createFrontFigure, addTicker } from './figure.js';
-import { sheet, toast } from './ui.js';
+import { sheet, toast, escapeHtml } from './ui.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -105,7 +105,9 @@ export function render(root) {
   const grid = $('#ex-grid');
   const doneToday = new Set(
     store.get().exerciseLogs
-      .filter((l) => l.iso.slice(0, 10) === store.todayKey())
+      // Compare local calendar days: l.iso is UTC, so slice(0,10) drifts a day
+      // for any non-UTC user. todayKey() localises both sides.
+      .filter((l) => store.todayKey(new Date(l.iso)) === store.todayKey())
       .map((l) => l.id),
   );
 
@@ -139,8 +141,8 @@ function renderLog() {
          <div class="ex-log-list">
            ${logs.map((l) => `
              <div class="ex-log-item">
-               <span>${l.emoji}</span><b>${l.name}</b><span>${l.amount}</span>
-               <span class="when">${relDay(l.iso)}</span>
+               <span>${escapeHtml(l.emoji)}</span><b>${escapeHtml(l.name)}</b><span>${escapeHtml(l.amount)}</span>
+               <span class="when">${escapeHtml(relDay(l.iso))}</span>
              </div>`).join('')}
          </div>
        </div>`
