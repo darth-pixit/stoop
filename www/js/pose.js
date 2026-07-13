@@ -21,6 +21,8 @@ const IX = { nose: 0, eyeL: 2, eyeR: 5, earL: 7, earR: 8, shL: 11, shR: 12 };
 let landmarker = null;
 let loadPromise = null;
 
+export function isReady() { return landmarker != null; }
+
 export function cameraSupported() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) &&
     typeof WebAssembly === 'object' &&
@@ -134,15 +136,16 @@ function xy(p) { return { x: p.x, y: p.y, v: p.visibility ?? 1 }; }
 // still (rock-steady readout), light smoothing while you actually move (no
 // visible lag) — so stability doesn't cost accuracy. A median-of-3 pre-stage
 // swallows single-frame detection glitches before they reach the filter.
-export function createSmoother({ minCutoff = 0.8, beta = 0.05, dCutoff = 1.0 } = {}) {
-  const win = [];                 // median-of-3 window
+export function createSmoother({ minCutoff = 0.4, beta = 0.04, dCutoff = 1.0 } = {}) {
+  const win = [];                 // median-of-5 window
   let xPrev = null, dxPrev = 0, tPrev = 0;
   const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
   return {
     push(raw, tMs) {
       win.push(raw);
-      if (win.length > 3) win.shift();
-      const x = win.length < 3 ? raw : [...win].sort((a, b) => a - b)[1];
+      if (win.length > 5) win.shift();
+      const sorted = [...win].sort((a, b) => a - b);
+      const x = win.length < 3 ? raw : sorted[Math.floor(sorted.length / 2)];
       if (xPrev == null) { xPrev = x; tPrev = tMs; return x; }
       const dt = Math.max(1e-3, (tMs - tPrev) / 1000);
       tPrev = tMs;

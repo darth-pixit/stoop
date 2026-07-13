@@ -104,3 +104,20 @@ email works out of the box for a beta.
   before your first ever sign-in (guest use) is claimed by that first account.
 - **Start over** wipes the cloud row too (it syncs the empty state up before
   reloading).
+
+## Branding the Google consent screen
+
+Out of the box, Google's "Sign in" page says *"to continue to
+`<project-ref>.supabase.co`"* — the raw Supabase domain, which looks
+unprofessional to users signing into **stoop**. Two levers fix it:
+
+1. **OAuth consent screen branding** (free): in Google Cloud Console →
+   *APIs & Services → OAuth consent screen*, set the app name to **stoop**,
+   add the logo and your homepage. This changes the header of the page.
+2. **Supabase custom domain** (paid add-on): give the project a domain like
+   `auth.yourdomain.com` (Supabase dashboard → *Settings → Custom Domains*),
+   update `supabaseUrl` in `www/js/config.js`, and re-add the redirect URLs in
+   the Google credentials. The "to continue to…" line then shows your domain
+   instead of `*.supabase.co`.
+
+Both are configuration-only; no app code changes beyond `config.js`.

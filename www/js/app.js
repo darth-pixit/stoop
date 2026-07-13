@@ -5,8 +5,10 @@ import * as monitor from './monitor.js';
 import * as stats from './stats.js';
 import * as exercises from './exercises.js';
 import * as flex from './flex.js';
+import * as pose from './pose.js';
 import * as auth from './auth.js';
 import * as sync from './sync.js';
+import * as notify from './notify.js';
 import { CONFIG, isConfigured } from './config.js';
 import { renderLogin } from './login.js';
 import { runOnboarding } from './onboarding.js';
@@ -139,9 +141,8 @@ function openSettings() {
   });
 
   el.querySelector('#set-notif').addEventListener('change', async (e) => {
-    if (e.target.checked && 'Notification' in window && Notification.permission === 'default') {
-      await Notification.requestPermission().catch(() => {});
-    }
+    if (e.target.checked) await notify.requestPermission().catch(() => {});
+    await monitor.refreshNotifPermission().catch(() => {});
     store.set({ notifOn: e.target.checked });
     toast(e.target.checked ? 'Nudges on 🔔' : 'Nudges off 🔕');
   });
@@ -219,6 +220,21 @@ function refreshVisibleViews() {
   showTab(active);
 }
 
+// After hand-backs from the system (OAuth browser, backgrounding), WKWebView
+// occasionally comes back with its render loop paused: JS and touches work
+// but nothing paints. If rAF doesn't tick shortly after such a transition,
+// poke the compositor with a forced layout.
+function ensureRendererAlive() {
+  let ticked = false;
+  requestAnimationFrame(() => { ticked = true; });
+  setTimeout(() => {
+    if (ticked) return;
+    document.body.style.transform = 'translateZ(0)';
+    void document.body.offsetHeight;
+    document.body.style.transform = '';
+  }, 1200);
+}
+
 // ── boot ────────────────────────────────────────────────────────
 async function boot() {
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
@@ -235,6 +251,14 @@ async function boot() {
   // A cloud pull replaces local state → refresh any open view.
   store.onHydrate(refreshVisibleViews);
 
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) ensureRendererAlive();
+  });
+
+  // Warm the bend-test pose model in the background so the first real test
+  // doesn't sit behind a multi-MB CDN download.
+  setTimeout(() => { pose.loadDetector().catch(() => {}); }, 2500);
+
   await auth.init();
   sync.init();
 
@@ -244,6 +268,7 @@ async function boot() {
   // Sign-ins that happen after boot (login screen or settings "Sign in").
   auth.onAuthChange((user) => {
     if (!bootHandled || !user) return;
+    ensureRendererAlive(); // we just came back from the OAuth browser
     $('#login')?.classList.add('hidden');
     if (!entered) {
       sync.waitForFirstSync().then(proceed);

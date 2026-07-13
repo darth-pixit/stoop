@@ -2,10 +2,12 @@
 // strain readout, live pill + system notification while stooping.
 import * as sensors from './sensors.js';
 import * as store from './store.js';
+import * as notify from './notify.js';
 import { strainKg, zoneFor, equivalentFor, STOOP_ENTER, STOOP_EXIT } from './strain.js';
 import { CONTEXTS, createContextTracker, createLatch } from './context.js';
 import { createSideFigure } from './figure.js';
-import { toast } from './ui.js';
+import { calibrationWidget } from './calibrate.js';
+import { sheet, toast } from './ui.js';
 
 let figure = null;
 let smoothed = 0;
@@ -15,6 +17,7 @@ let stoopStartedAt = null;     // sustained-stoop timer for notifications
 let lastNotifyAt = 0;
 let unsubscribe = null;
 let rafPending = false;
+let notifGranted = false;      // cached; refreshed on render + after permission asks
 
 // Context gate: is this sample judgable posture at all, or is the user lying
 // down / on the move / phone parked flat? Unjudgable time is logged separately
@@ -39,6 +42,7 @@ export function render(root) {
         <div class="angle-big"><span id="angle-num">–</span><span class="deg">°</span></div>
         <div class="zone-tag" id="zone-tag">reading…</div>
         <div class="strain-line" id="strain-line"></div>
+        <button class="chip calib-chip hidden" id="btn-calibrate">🎯 Uncalibrated — teach me your good hold</button>
       </div>
       <div class="monitor-row">
         <button class="btn primary" id="btn-monitor">⏸ Pause watching</button>
@@ -65,10 +69,24 @@ export function render(root) {
   sim.addEventListener('input', (e) => sensors.setSimAngle(+e.target.value));
   if (!monitoring) $('#btn-monitor').textContent = '▶️ Resume watching';
 
+  $('#btn-calibrate').addEventListener('click', () => {
+    const sh = sheet(`
+      <div class="sheet-head"><h3>🎯 Calibrate</h3><button class="btn ghost small" data-close>Cancel</button></div>
+      <div id="cal-zone" style="margin-top:8px"></div>
+    `);
+    calibrationWidget(sh.el.querySelector('#cal-zone'), (beta) => {
+      sh.close();
+      toast(`Calibrated at ${Math.round(beta)}° 🌤️`);
+      $('#btn-calibrate')?.classList.add('hidden');
+    });
+  });
+
   if (!unsubscribe) unsubscribe = sensors.subscribe(onReading);
   sensors.start();
+  notify.granted().then((v) => { notifGranted = v; });
   setTimeout(() => {
     if (sensors.isSimulated()) $('#sim-strip')?.classList.remove('hidden');
+    else if (!store.get().calibrated) $('#btn-calibrate')?.classList.remove('hidden');
   }, 1700);
 
   updateMiniStats();
@@ -178,8 +196,15 @@ function updateMiniStats() {
 }
 
 // ── live pill + system notification ─────────────────────────────
-const SUSTAIN_MS = 10000;   // stoop this long before we speak up
+const SUSTAIN_MS = 8000;    // stoop this long before we speak up
 const RENOTIFY_MS = 20000;  // refresh cadence while still stooping
+
+// Called after settings/onboarding ask for permission, so the cached flag
+// doesn't lag behind until the next render.
+export async function refreshNotifPermission() {
+  notifGranted = await notify.granted();
+  return notifGranted;
+}
 
 function meterFor(angle) {
   const filled = Math.min(6, Math.max(1, Math.round(angle / 12)));
@@ -197,32 +222,24 @@ function maybeNotify(ts, judgable) {
   if (ts - stoopStartedAt < SUSTAIN_MS) return;
 
   const settings = store.get();
-  if (!settings.notifOn) return;
+  if (!settings.notifOn || !notifGranted) return;
   if (ts - lastNotifyAt < RENOTIFY_MS) return;
   lastNotifyAt = ts;
 
-  if ('Notification' in window && Notification.permission === 'granted') {
-    const zone = zoneFor(smoothed);
-    const kg = strainKg(smoothed);
-    try {
-      const n = new Notification(`${zone.emoji} ${Math.round(smoothed)}° stoop — ${kg.toFixed(0)} kg on your neck`, {
-        tag: 'stoop-live',
-        renotify: false,
-        silent: true,
-        body: `${meterFor(smoothed)}\nThat's like ${equivalentFor(kg)}. Lift your phone to eye level 👆`,
-        icon: 'icons/icon.svg',
-        badge: 'icons/icon.svg',
-      });
-      liveNotification = n;
-      n.onclick = () => window.focus();
-    } catch { /* some platforms only allow notifications from a service worker */ }
-  }
+  const zone = zoneFor(smoothed);
+  const kg = strainKg(smoothed);
+  notify.showLive(
+    `${zone.emoji} ${Math.round(smoothed)}° stoop — ${kg.toFixed(0)} kg on your neck`,
+    `${meterFor(smoothed)}\nThat's like ${equivalentFor(kg)}. Lift your phone to eye level 👆`,
+  );
+  notified = true;
 }
 
-let liveNotification = null;
+let notified = false;
 function closeNotification() {
-  try { liveNotification?.close(); } catch { /* already gone */ }
-  liveNotification = null;
+  if (!notified) return;
+  notified = false;
+  notify.closeLive();
 }
 
 // One gentle heads-up per lying-down session once scrolling on your back has
@@ -240,21 +257,12 @@ function maybeBedNudge(ts, ctx) {
   if (bedNudgedThisLie || ts - overheadStartedAt < BED_SUSTAIN_MS) return;
 
   const settings = store.get();
-  if (!settings.notifOn) return;
+  if (!settings.notifOn || !notifGranted) return;
   bedNudgedThisLie = true;
-  if ('Notification' in window && Notification.permission === 'granted') {
-    try {
-      const n = new Notification('🛏️ Been scrolling on your back for a while', {
-        tag: 'stoop-bed',
-        renotify: false,
-        silent: true,
-        body: 'Your neck is fine down there — just so you know Stoop isn\'t counting this as good posture 😴',
-        icon: 'icons/icon.svg',
-        badge: 'icons/icon.svg',
-      });
-      n.onclick = () => window.focus();
-    } catch { /* some platforms only allow notifications from a service worker */ }
-  }
+  notify.showBed(
+    '🛏️ Been scrolling on your back for a while',
+    'Your neck is fine down there — just so you know Stoop isn\'t counting this as good posture 😴',
+  );
 }
 
 function updateLivePill(zone, angle, kg) {

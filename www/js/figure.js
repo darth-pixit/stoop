@@ -55,12 +55,17 @@ export function createSideFigure(container, { showWeight = true, showArc = true 
     arc = el('path', { fill: 'none', stroke: '#FF6B5E', 'stroke-width': 3, 'stroke-linecap': 'round', opacity: 0 }, svg);
   }
 
-  // ── head group (rotates about the neck base) ──
-  const head = el('g', {}, svg);
-  el('path', { // neck
+  // ── neck (drawn under the head, bends as a curve rather than a hinge —
+  // a rigid rotation reads as a broken hinge; a quadratic arc that lags the
+  // head's rotation reads as an actual neck) ──
+  const neck = el('path', {
     d: `M ${PIVOT.x} ${PIVOT.y + 4} L 166 118`,
     stroke: SKIN, 'stroke-width': 24, 'stroke-linecap': 'round', fill: 'none',
-  }, head);
+  }, svg);
+  const NECK_END = { x: 166, y: 118 };
+
+  // ── head group (rotates about the neck base) ──
+  const head = el('g', {}, svg);
   el('circle', { cx: 172, cy: 96, r: 36, fill: SKIN, stroke: SKIN_EDGE, 'stroke-width': 2.5 }, head);
   el('path', { // hair swoosh
     d: 'M 141 82 Q 150 52 180 60 Q 205 66 206 88 Q 196 76 178 76 Q 152 76 148 96 Q 143 90 141 82',
@@ -97,17 +102,35 @@ export function createSideFigure(container, { showWeight = true, showArc = true 
 
   container.appendChild(svg);
 
+  // rotate a point about the pivot
+  const rotPt = (p, deg) => {
+    const r = (deg * Math.PI) / 180;
+    const dx = p.x - PIVOT.x, dy = p.y - PIVOT.y;
+    return {
+      x: PIVOT.x + dx * Math.cos(r) - dy * Math.sin(r),
+      y: PIVOT.y + dx * Math.sin(r) + dy * Math.cos(r),
+    };
+  };
+
   function set({ angle = 0, zone = 'upright', kg = null, armBack = 0 }) {
     const a = Math.max(-20, Math.min(75, angle));
     head.setAttribute('transform', `rotate(${a}, ${PIVOT.x}, ${PIVOT.y})`);
+
+    // the neck arcs into the bend: its end follows the head's rotation while
+    // its midpoint lags at roughly half the angle
+    const end = rotPt(NECK_END, a);
+    const mid0 = { x: (PIVOT.x + NECK_END.x) / 2, y: (PIVOT.y + NECK_END.y) / 2 };
+    const ctrl = rotPt(mid0, a * 0.45);
+    neck.setAttribute('d', `M ${PIVOT.x} ${PIVOT.y + 4} Q ${ctrl.x} ${ctrl.y} ${end.x} ${end.y}`);
+
     mouth.setAttribute('d', MOUTHS[zone] || MOUTHS.upright);
     brow.setAttribute('transform', zone === 'severe' || zone === 'moderate' ? 'rotate(12 190 82)' : '');
     eye.setAttribute('r', zone === 'severe' ? 2.6 : 3.6);
 
-    // arm dips as the head does; chest-opener swings it behind the back
-    const armRot = armBack ? -34 * armBack : a * 0.35;
+    // arm dips gently as the head does; chest-opener swings it behind the back
+    const armRot = armBack ? -34 * armBack : a * 0.22;
     arm.setAttribute('transform', `rotate(${armRot}, 158, 172)`);
-    phone.setAttribute('transform', `rotate(${a * 0.5}, 214, 173)`);
+    phone.setAttribute('transform', `rotate(${a * 0.38}, 214, 173)`);
 
     if (arc) {
       if (a > 4) {

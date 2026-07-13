@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "serve": "python3 -m http.server 8000 --directory www",
-    "test": "node --test test/*.test.mjs",
+    "check": "esbuild www/js/app.js --bundle --outfile=/dev/null --log-level=warning",
+    "test": "npm run check && node --test test/*.test.mjs",
     "vendor:supabase": "node scripts/vendor-supabase.mjs",
     "sync": "cap sync",
     "copy": "cap copy",
@@ -23,6 +24,7 @@
     "@capacitor/browser": "^6.0.0",
     "@capacitor/core": "^6.1.2",
     "@capacitor/ios": "^6.1.2",
+    "@capacitor/local-notifications": "^6.0.0",
     "@capacitor/splash-screen": "^6.0.0",
     "@supabase/supabase-js": "^2.45.4"
   },

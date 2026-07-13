@@ -195,6 +195,7 @@ export function startTest({ embedded = null, onDone = null } = {}) {
       <label class="sim-check"><input type="checkbox" id="fx-sim-creep"> 🙈 fake a shoulder shrug</label>
     </div>
     <div class="monitor-row" id="fx-actions"></div>
+    <button class="ob-skip" id="fx-restart">↻ Restart the test</button>
   `;
 
   let panel, closeSheet;
@@ -217,24 +218,55 @@ export function startTest({ embedded = null, onDone = null } = {}) {
   q('#fx-sim-range').addEventListener('input', (e) => { simTilt = +e.target.value; });
   q('#fx-sim-creep').addEventListener('change', (e) => { simCreep = e.target.checked ? 0.18 : 0; });
 
+  // A stuck or wobbly run shouldn't cost the user the whole flow — one tap
+  // throws this attempt away and starts fresh (camera re-opens cleanly).
+  q('#fx-restart').addEventListener('click', () => {
+    if (embedded) {
+      teardown();
+      startTest({ embedded, onDone });
+    } else {
+      closeSheet(); // onClose runs teardown()
+      startTest({ onDone });
+    }
+  });
+
+  // Bring the camera + live angle into view — by default the test mounts
+  // below the intro copy and the interesting part sits off-screen.
+  setTimeout(() => {
+    q('#fx-cam')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 250);
+
   boot();
 
   // ── startup: camera + model, else simulation ──────────────────────
+  const MODEL_TIMEOUT_MS = 20000;
+
   async function boot() {
     if (!pose.cameraSupported()) return fallToSim('This device has no camera we can use');
     // Assign `stream` the moment the camera opens, so if the model load fails
-    // afterwards we can still stop the camera we opened.
-    const camP = pose.openCamera(video).then((s) => { stream = s; });
+    // afterwards we can still stop the camera we opened. Once the camera is
+    // live, tell the truth about what we're actually waiting on.
+    const camP = pose.openCamera(video).then((s) => {
+      stream = s;
+      if (!closed && !pose.isReady()) status('Camera\'s on — loading the pose model (first time only) 📦');
+    });
+    const timeout = new Promise((_, rej) => setTimeout(
+      () => rej(Object.assign(new Error('pose model load timed out'), { name: 'TimeoutError' })),
+      MODEL_TIMEOUT_MS,
+    ));
     try {
-      await Promise.all([pose.loadDetector(), camP]);
+      await Promise.race([Promise.all([pose.loadDetector(), camP]), timeout]);
       if (closed) { pose.stopCamera(stream); return; }
       status(null);
       loop();
     } catch (err) {
       pose.stopCamera(stream);
-      // permission denied, model/CDN failure, or no camera → still usable
+      // permission denied, model/CDN failure or stall, or no camera → still usable
       const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
-      fallToSim(denied ? 'Camera permission was blocked' : "Couldn't start the camera");
+      const slow = err && err.name === 'TimeoutError';
+      fallToSim(denied ? 'Camera permission was blocked'
+        : slow ? 'The pose model is taking too long to download'
+        : "Couldn't start the camera");
     }
   }
 
@@ -299,8 +331,9 @@ export function startTest({ embedded = null, onDone = null } = {}) {
     while (buf.length && now - buf[0].t > 1000) buf.shift();
 
     const eff = base ? Math.abs(sample.roll - base.roll) : 0;
-    const shown = phase === 'locked' ? results[side] : eff;
-    q('#fx-angle').textContent = Math.round(shown);
+    const shown = Math.round(phase === 'locked' ? results[side] : eff);
+    const angleEl = q('#fx-angle');
+    if (angleEl.textContent !== String(shown)) angleEl.textContent = shown;
 
     q('#fx-creep').classList.toggle('hidden', !(phase === 'tilt' && sample.creep > CREEP_GATE));
 

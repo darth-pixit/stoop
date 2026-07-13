@@ -23,9 +23,9 @@ export function renderLogin(rootEl, { onSkip } = {}) {
   if (p.google) buttons.push(`<button class="sso-btn google" data-provider="google">${GOOGLE_MARK}<span>Continue with Google</span></button>`);
 
   wrap.innerHTML = `
-    <div class="login-mark" aria-hidden="true">🙂→🫠</div>
+    <div class="login-mark" aria-hidden="true"><span class="logo-mark"></span></div>
     <h1>Welcome to <span class="accent">stoop.</span></h1>
-    <p class="lead">Sign in so your calibration, streaks, bend tests and moves follow you to every device — and back after a reinstall.</p>
+    <p class="lead">Your streaks, calibration and bend tests — on every device.</p>
     <div class="sso-list">${buttons.join('')}</div>
     ${p.email ? `
       <div class="login-or"><span>or</span></div>

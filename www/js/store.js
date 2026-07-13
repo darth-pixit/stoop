@@ -4,6 +4,7 @@ const KEY = 'stoop.v1';
 const DEFAULTS = {
   setupDone: false,
   calibBeta: 75,          // phone pitch (°) captured while user held "good posture"
+  calibrated: false,      // true once the user has actually captured a hold
   notifOn: true,
   checkin: { weekday: 6, hour: 10 }, // Saturday 10:00 by default
   lastCheckinISO: null,
@@ -132,6 +133,9 @@ export function logExercise(entry) {
 
 // ── weekly check-in scheduling ──────────────────────────────────
 export function checkinDue() {
+  // No check-in cycle until there's a first test to check in against —
+  // a brand-new user gets the "take your first test" CTA, not a re-test nudge.
+  if (!state.flexLogs.length) return false;
   const { weekday, hour } = state.checkin;
   const now = new Date();
   // most recent scheduled moment at or before now
