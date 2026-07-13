@@ -8,7 +8,7 @@ const DEFAULTS = {
   checkin: { weekday: 6, hour: 10 }, // Saturday 10:00 by default
   lastCheckinISO: null,
   sampleData: false,
-  days: {},               // 'YYYY-MM-DD' → { phoneMs, stoopMs, zoneMs: {mild,moderate,severe} }
+  days: {},               // 'YYYY-MM-DD' → { phoneMs, stoopMs, unjudgedMs, zoneMs: {mild,moderate,severe} }
   flexLogs: [],           // { iso, left, right, quality: 'clean'|'retake' }
   exerciseLogs: [],       // { iso, id, name, emoji, amount }
   updatedAt: 0,           // ms epoch of last local change — drives cloud last-write-wins
@@ -83,13 +83,20 @@ export function todayKey(d = new Date()) {
 
 export function dayRecord(key = todayKey()) {
   if (!state.days[key]) {
-    state.days[key] = { phoneMs: 0, stoopMs: 0, zoneMs: { mild: 0, moderate: 0, severe: 0 } };
+    state.days[key] = { phoneMs: 0, stoopMs: 0, unjudgedMs: 0, zoneMs: { mild: 0, moderate: 0, severe: 0 } };
   }
   return state.days[key];
 }
 
 export function addSample(dtMs, zoneId) {
   const rec = dayRecord();
+  // Lying down, walking, phone resting flat: neither upright credit nor stoop
+  // debit — its own bucket, so stoopMs/phoneMs stays "share of judged time".
+  if (zoneId === 'unjudged') {
+    rec.unjudgedMs = (rec.unjudgedMs || 0) + dtMs;
+    save();
+    return;
+  }
   rec.phoneMs += dtMs;
   if (zoneId !== 'upright') {
     rec.stoopMs += dtMs;
@@ -105,7 +112,7 @@ export function lastDays(n) {
   d.setDate(d.getDate() - (n - 1));
   for (let i = 0; i < n; i++) {
     const key = todayKey(d);
-    const rec = state.days[key] || { phoneMs: 0, stoopMs: 0, zoneMs: { mild: 0, moderate: 0, severe: 0 } };
+    const rec = state.days[key] || { phoneMs: 0, stoopMs: 0, unjudgedMs: 0, zoneMs: { mild: 0, moderate: 0, severe: 0 } };
     out.push({ key, date: new Date(d), ...structuredClone(rec) });
     d.setDate(d.getDate() + 1);
   }

@@ -2,6 +2,13 @@
 // deliberately good posture. Used in onboarding and settings.
 import * as sensors from './sensors.js';
 import * as store from './store.js';
+import { upFromOrientation, poseAngles } from './context.js';
+
+function median(values) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
 
 // Renders into `container`; calls onDone(calibBeta) after capture.
 export function calibrationWidget(container, onDone) {
@@ -23,10 +30,43 @@ export function calibrationWidget(container, onDone) {
     btn.disabled = true;
     btn.textContent = 'Hold it… 📸';
     const samples = [];
-    const collect = sensors.subscribe((r) => { if (r.beta != null) samples.push(r.beta); });
+    const tilts = [];   // screenTilt per sample, for the lying/flat sanity gate
+    const sides = [];   // |sideTilt| per sample
+    const collect = sensors.subscribe((r) => {
+      if (r.beta == null) return;
+      samples.push(r.beta);
+      const up = upFromOrientation(r.beta, r.gamma);
+      if (up) {
+        const p = poseAngles(up);
+        tilts.push(p.screenTilt);
+        sides.push(Math.abs(p.sideTilt));
+      }
+    });
     setTimeout(() => {
       collect();
+
+      // You can't capture "good posture" lying on your back, with the phone
+      // nearly flat, or on its side — that baseline would poison every later
+      // judgement. (Skipped when gamma is unavailable; the clamp below still
+      // keeps the baseline sane.)
+      const tilt = median(tilts);
+      const side = median(sides);
+      if (tilt != null && (tilt > 100 || tilt < 30 || side > 30)) {
+        btn.disabled = false;
+        btn.textContent = '📸 Capture my good posture';
+        live.textContent = '–';
+        let hint = container.querySelector('[data-cal-hint]');
+        if (!hint) {
+          hint = document.createElement('p');
+          hint.setAttribute('data-cal-hint', '');
+          hint.style.cssText = 'color:var(--ink-2);font-size:13.5px;margin:10px 2px 0';
+          btn.insertAdjacentElement('afterend', hint);
+        }
+        hint.textContent = 'Sit or stand upright and hold the phone near eye level, then try again 🙂';
+        return; // keep the live readout running for another attempt
+      }
       unsub();
+
       const avg = samples.length
         ? samples.reduce((a, v) => a + v, 0) / samples.length
         : store.get().calibBeta;
