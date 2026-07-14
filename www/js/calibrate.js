@@ -28,8 +28,14 @@ export function calibrationWidget(container, onDone, onFail) {
   let done = false;
   let captureTimer = null;
   let collect = null;
+  // Display the fold-at-vertical pitch (steady 90 when upright, never >90)
+  // with a light EMA so hand tremor doesn't make the number dance.
+  let disp = null;
   const unsub = sensors.subscribe((r) => {
-    if (r.beta != null && live.isConnected) live.textContent = Math.round(r.beta);
+    const p = r.pitch ?? r.beta;
+    if (p == null || !live.isConnected) return;
+    disp = disp == null ? p : disp + (p - disp) * 0.25;
+    live.textContent = Math.round(disp);
   });
 
   function cleanup() {
@@ -49,7 +55,7 @@ export function calibrationWidget(container, onDone, onFail) {
     const sides = [];   // |sideTilt| per sample
     collect = sensors.subscribe((r) => {
       if (r.beta == null) return;
-      samples.push(r.beta);
+      samples.push(r.pitch ?? r.beta); // folded pitch: a wobble through vertical can't skew the mean
       const up = upFromOrientation(r.beta, r.gamma);
       if (up) {
         const p = poseAngles(up);
