@@ -7,10 +7,13 @@
 // that decides whether a sample is judgable posture at all.
 
 const listeners = new Set();
+const statusListeners = new Set();
 let running = false;
 let sensorsSeen = false;
 let simulated = false;
 let simAngleDeg = 0; // simulated *neck* angle for monitor / tilt for flex
+let permission = 'unknown'; // iOS gate: 'unknown' | 'granted' | 'denied'
+let fallbackTimer = null;
 
 export const reading = {
   beta: null,          // phone pitch: 0 flat on table → 90 upright
@@ -27,6 +30,33 @@ export function isSimulated() { return simulated; }
 export function setSimAngle(deg) { simAngleDeg = deg; }
 export function getSimAngle() { return simAngleDeg; }
 
+// iOS 13+ gates motion events behind a permission call that must come from a
+// user tap — the app can't fire it on boot. While the gate is closed the UI
+// shows an "allow motion access" button instead of the desktop simulator.
+export function needsPermissionGate() {
+  return (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') ||
+         (typeof DeviceMotionEvent !== 'undefined' &&
+          typeof DeviceMotionEvent.requestPermission === 'function');
+}
+
+export function getStatus() {
+  if (simulated) return 'simulated';   // sensor-less hardware, slider drives readings
+  if (sensorsSeen) return 'live';      // real events flowing
+  if (running && needsPermissionGate() && permission !== 'granted') return 'blocked';
+  return 'waiting';                    // listeners armed, nothing arrived yet
+}
+
+export function onStatus(fn) {
+  statusListeners.add(fn);
+  return () => statusListeners.delete(fn);
+}
+
+function emitStatus() {
+  const s = getStatus();
+  for (const fn of statusListeners) fn(s);
+}
+
 export function subscribe(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -40,18 +70,16 @@ function emit() {
 
 // A real sensor event arrived — stop any simulation that had kicked in so fake
 // readings can't interleave with (or override) the genuine hardware feed.
-function markReal() {
+function markLive() {
+  if (sensorsSeen && !simulated) return;
   sensorsSeen = true;
-  if (simulated) {
-    simulated = false;
-    clearInterval(simTimer);
-    simTimer = null;
-  }
+  stopSimulation();
+  emitStatus();
 }
 
 function onOrientation(e) {
   if (e.beta == null) return;
-  markReal();
+  markLive();
   reading.beta = e.beta;
   reading.gamma = e.gamma;
   emit();
@@ -60,7 +88,7 @@ function onOrientation(e) {
 function onMotion(e) {
   const g = e.accelerationIncludingGravity;
   if (!g || g.x == null) return;
-  markReal();
+  markLive();
   const mag = Math.hypot(g.x, g.y, g.z) || 9.81;
   // Angle between the phone's long (y) axis and gravity. Held upright against
   // the ear this reads ~0°; ear-to-shoulder head tilt grows it directly.
@@ -75,6 +103,12 @@ function onMotion(e) {
 }
 
 let simTimer = null;
+function stopSimulation() {
+  simulated = false;
+  clearInterval(simTimer);
+  simTimer = null;
+}
+
 function startSimulation() {
   simulated = true;
   clearInterval(simTimer);
@@ -89,39 +123,50 @@ function startSimulation() {
     reading.gravity = { x: 0, y: -9.81, z: 0 };
     emit();
   }, 100);
+  emitStatus();
 }
 
-// iOS 13+ requires an explicit user-gesture permission request.
+// iOS 13+ requires an explicit user-gesture permission request. Remember the
+// answer so missing events read as "blocked, show the enable button" rather
+// than "no hardware, simulate".
 export async function requestPermission() {
+  let granted = true;
   try {
     if (typeof DeviceOrientationEvent !== 'undefined' &&
         typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const r = await DeviceOrientationEvent.requestPermission();
-      if (r !== 'granted') return false;
+      granted = (await DeviceOrientationEvent.requestPermission()) === 'granted';
     }
     if (typeof DeviceMotionEvent !== 'undefined' &&
         typeof DeviceMotionEvent.requestPermission === 'function') {
       await DeviceMotionEvent.requestPermission().catch(() => {});
     }
-    return true;
   } catch {
-    return false;
+    granted = false; // denied earlier this session, or called outside a tap
   }
+  permission = granted ? 'granted' : 'denied';
+  if (granted && running && !sensorsSeen) armFallback(); // events should flow now; if not, simulate
+  emitStatus();
+  return granted;
 }
 
-// If nothing arrives shortly, this hardware has no usable sensors — but only
-// conclude that while the page is visible. A page loaded (or app-switched away)
-// while hidden gets no orientation events; starting the simulation then would
-// wrongly latch a real phone into fake readings, so defer until it's visible.
-function maybeStartSimulation() {
-  if (sensorsSeen || !running || simulated) return;
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-  startSimulation();
+// If nothing arrives shortly: gated platforms (iOS) wait for the user to tap
+// the enable button; everything else has no usable sensors — simulate. Only
+// conclude "no sensors" while the page is visible: a page loaded (or app-
+// switched away) while hidden gets no orientation events, and simulating then
+// would wrongly latch a real phone into fake readings, so defer the verdict.
+function armFallback() {
+  clearTimeout(fallbackTimer);
+  fallbackTimer = setTimeout(() => {
+    if (!running || sensorsSeen || simulated) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (needsPermissionGate() && permission !== 'granted') emitStatus();
+    else startSimulation();
+  }, 1500);
 }
 
 function onVisibleRecheck() {
   if (document.visibilityState === 'visible' && running && !sensorsSeen && !simulated) {
-    setTimeout(maybeStartSimulation, 1500);
+    armFallback();
   }
 }
 
@@ -131,7 +176,7 @@ export function start() {
   window.addEventListener('deviceorientation', onOrientation);
   window.addEventListener('devicemotion', onMotion);
   window.addEventListener('visibilitychange', onVisibleRecheck);
-  setTimeout(maybeStartSimulation, 1500);
+  armFallback();
 }
 
 export function stop() {
@@ -139,9 +184,8 @@ export function stop() {
   window.removeEventListener('deviceorientation', onOrientation);
   window.removeEventListener('devicemotion', onMotion);
   window.removeEventListener('visibilitychange', onVisibleRecheck);
-  clearInterval(simTimer);
-  simTimer = null;
-  simulated = false;
+  clearTimeout(fallbackTimer);
+  stopSimulation();
 }
 
 // Phone pitch → estimated neck flexion, personalised by calibration.

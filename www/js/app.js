@@ -106,6 +106,13 @@ function openSettings() {
     </div>
     ${accountSectionHTML()}
     <div class="card" style="margin-top:10px">
+      ${sensors.needsPermissionGate() ? `
+      <div class="set-row">
+        <div class="sr-label"><b>Motion access</b><small id="set-motion-note">${sensors.getStatus() === 'live'
+          ? 'On — reading your phone’s angle.'
+          : 'Off — Stoop needs it to see your angle.'}</small></div>
+        ${sensors.getStatus() === 'live' ? '' : '<button class="btn ghost small" id="set-motion">Allow</button>'}
+      </div>` : ''}
       <div class="set-row">
         <div class="sr-label"><b>Live stoop notifications</b><small>A silent nudge after ~10s of sustained stooping (while Stoop is open).</small></div>
         <label class="switch"><input type="checkbox" id="set-notif" ${s.notifOn ? 'checked' : ''}><span class="knob"></span></label>
@@ -142,6 +149,17 @@ function openSettings() {
     await auth.signOut();
     store.resetAll();                     // don't leave one user's health data for the next
     location.reload();
+  });
+
+  el.querySelector('#set-motion')?.addEventListener('click', async (e) => {
+    const ok = await sensors.requestPermission();
+    if (ok) {
+      toast('Motion access on 🎛️');
+      el.querySelector('#set-motion-note').textContent = 'On — reading your phone’s angle.';
+      e.target.remove();
+    } else {
+      toast('iOS didn’t re-ask — fully close Stoop, reopen it, then try again');
+    }
   });
 
   el.querySelector('#set-notif').addEventListener('change', async (e) => {
