@@ -16,7 +16,8 @@ let permission = 'unknown'; // iOS gate: 'unknown' | 'granted' | 'denied'
 let fallbackTimer = null;
 
 export const reading = {
-  beta: null,          // phone pitch: 0 flat on table → 90 upright
+  beta: null,          // raw pitch euler angle: 0 flat on table → 90 upright → >90 past vertical
+  pitch: null,         // display-stable pitch: folds at the vertical (never exceeds 90)
   gamma: null,         // phone roll: ±90 on its side — context detection only
   gravity: null,       // {x,y,z} m/s² including gravity
   tiltFromVertical: 0, // ° the phone's long axis leans away from plumb
@@ -77,10 +78,22 @@ function markLive() {
   emitStatus();
 }
 
+// Raw beta is an euler angle with a singularity at the vertical: as the phone
+// wobbles through upright, beta keeps counting past 90 (87 → 93 → 89…), so a
+// pitch readout never settles on 90 and appears to jump. Folding through the
+// gravity up-vector (up.y = sin β → pitch = asin(sin β)) is wobble-symmetric:
+// vertical reads a steady 90 and a ±3° wobble shows as 87…90…87, not 87…93.
+export function pitchFrom(beta) {
+  if (beta == null) return null;
+  const s = Math.sin((beta * Math.PI) / 180);
+  return (Math.asin(Math.max(-1, Math.min(1, s))) * 180) / Math.PI;
+}
+
 function onOrientation(e) {
   if (e.beta == null) return;
   markLive();
   reading.beta = e.beta;
+  reading.pitch = pitchFrom(e.beta);
   reading.gamma = e.gamma;
   emit();
 }
@@ -115,6 +128,7 @@ function startSimulation() {
   simTimer = setInterval(() => {
     // For the monitor: sim slider drives neck angle → synthesize matching beta.
     reading.beta = 75 - simAngleDeg;
+    reading.pitch = 75 - simAngleDeg;
     reading.gamma = 0;
     // For the flex test: sim slider drives tilt directly, clean side-bend.
     reading.tiltFromVertical = simAngleDeg;

@@ -56,16 +56,19 @@ That runs two gates:
    the status reads "loading the pose model" (not "waking up the camera")
    while the model downloads; if you throttle the network it falls back to
    sim mode within ~20 s instead of spinning forever.
-4. **Flat-phone guard**: on the Now tab, put the phone flat on a table.
+4. **Vertical pitch**: on the calibration screen, hold the phone dead
+   vertical — the pitch readout must settle at ~90 (never above) and a small
+   wobble through vertical must not make it jump.
+5. **Flat-phone guard**: on the Now tab, put the phone flat on a table.
    Within ~8 s it must read "😴 Phone at rest", NOT a 60°+ stoop.
-5. **Uncalibrated chip**: fresh install, skip calibration → the Now tab
+6. **Uncalibrated chip**: fresh install, skip calibration → the Now tab
    shows the "Uncalibrated" chip; tapping it opens calibration.
-6. **Live notification**: enable nudges, background-lock nothing — with the
+7. **Live notification**: enable nudges, background-lock nothing — with the
    app open, stoop hard for ~8 s → a silent local notification appears
    (requires `@capacitor/local-notifications` synced into the iOS project).
-7. **Safe areas**: the settings gear and logo clear the notch; the tab bar
+8. **Safe areas**: the settings gear and logo clear the notch; the tab bar
    clears the home indicator; onboarding dots/CTA clear the bottom inset.
-8. **Sign out / Start over**: both reload into a clean, working login.
+9. **Sign out / Start over**: both reload into a clean, working login.
 
 ## Known non-issues
 
